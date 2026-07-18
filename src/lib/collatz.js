@@ -213,28 +213,54 @@ export function dropStreamToZeroAt(stream, nodeId) {
 }
 
 /**
- * Shift one cell; overflow carries upward (toward row 0), like test2.
+ * Shift one cell only. Clamps to 0–2 — does not carry into rows above.
  * @param {Stream} stream
  * @param {number} nodeIndex
  * @param {number} delta  +1 right / -1 left
  */
 export function shiftStreamNode(stream, nodeIndex, delta) {
 	if (!stream[nodeIndex] || delta === 0) return;
+	stream[nodeIndex].nodeShift = clampShift(stream[nodeIndex].nodeShift + delta);
+}
 
-	let temp = stream[nodeIndex].nodeShift + delta;
-	if (temp > 2) {
-		if (nodeIndex > 0) {
-			// Carry the overflow to the row above
-			shiftStreamNode(stream, nodeIndex - 1, temp - stream[nodeIndex].nodeShift);
+/**
+ * Resize a grid in place-semantics: extra columns are prepended on the left,
+ * extra rows are appended at the bottom. Shrinking removes from the left / bottom
+ * so existing right-side / top content is preserved.
+ *
+ * @param {Stream[]} streams
+ * @param {number} newCols
+ * @param {number} newRows
+ * @returns {Stream[]}
+ */
+export function resizeStreams(streams, newCols, newRows) {
+	const cols = Math.max(1, Math.floor(Number(newCols) || 1));
+	const rows = Math.max(1, Math.floor(Number(newRows) || 1));
+	const oldCols = streams?.length ?? 0;
+	const oldRows = streams?.[0]?.length ?? 0;
+	const out = emptyGrid(cols, rows);
+
+	// Growing cols → pad left (old col c lands at c + (cols - oldCols)).
+	// Shrinking cols → drop leftmost (old col c lands at c + (cols - oldCols)).
+	const colDelta = cols - oldCols;
+
+	for (let oc = 0; oc < oldCols; oc++) {
+		const nc = oc + colDelta;
+		if (nc < 0 || nc >= cols) continue;
+		const copyRows = Math.min(oldRows, rows);
+		const srcCol = streams[oc];
+		const dstCol = out[nc];
+		for (let r = 0; r < copyRows; r++) {
+			const src = srcCol[r];
+			if (!src) continue;
+			dstCol[r].nodeShift = clampShift(src.nodeShift);
+			// Preserve identity when possible so Svelte keyed cells stay stable
+			dstCol[r].id = src.id;
 		}
-		temp = 2;
-	} else if (temp < 0) {
-		if (nodeIndex > 0) {
-			shiftStreamNode(stream, nodeIndex - 1, temp);
-		}
-		temp = 0;
 	}
-	stream[nodeIndex].nodeShift = temp;
+
+	for (let c = 0; c < cols; c++) realignStream(out[c]);
+	return out;
 }
 
 /**

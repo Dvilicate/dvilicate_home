@@ -23,6 +23,11 @@
 	 * connections", column hover, or the column currently animating.
 	 */
 	export let forceExpanded = false;
+	/**
+	 * When true (Lines: hidden), never mount the wire cylinder — not even on
+	 * hover / focus / drag / cascade active. Drag & keys still rotate the node.
+	 */
+	export let wiresHidden = false;
 	/** @type {(dir: 'left' | 'right') => void} */
 	export let onMove = () => {};
 
@@ -76,8 +81,9 @@
 	$: transformX = settledSlide + dragSlide;
 	$: transformY = dragRotY;
 
-	/** Full UI: global/column force, or this cell is interacting / hot */
-	$: expanded = forceExpanded || active || hovering || focused || dragging;
+	/** Full wire UI — blocked entirely when parent has Lines: hidden */
+	$: expanded =
+		!wiresHidden && (forceExpanded || active || hovering || focused || dragging);
 
 	function startPoint(index) {
 		return index * nodeWidth + nodeWidth / 2;
@@ -342,7 +348,10 @@
 			</div>
 		</div>
 	{:else}
-		<!-- Cheap stub: ~5 DOM nodes instead of ~100 -->
+		<!--
+		  Closed face: big residue badge + neon tags (Quickview look).
+		  Still cheap (~6 nodes); hover/expand mounts the full wire drum.
+		-->
 		<div
 			class="housing lite-housing"
 			role="button"
@@ -358,10 +367,10 @@
 		>
 			<span class="lite-label">{label}</span>
 			{#if shift > 0}
-				<span class="shift-tag lite-tag">|{shift}{'>'.repeat(shift)}</span>
+				<span class="shift-tag">|{shift}{'>'.repeat(shift)}</span>
 			{/if}
 			{#if carry > 0}
-				<span class="carry-tag lite-tag">{'<' .repeat(Math.min(carry, 3))}{carry}</span>
+				<span class="carry-tag">{'<' .repeat(Math.min(carry, 3))}{carry}</span>
 			{/if}
 			<span class="lite-hint" aria-hidden="true">‹ ›</span>
 		</div>
@@ -392,19 +401,26 @@
 		content-visibility: visible;
 	}
 
-	/* Opacity-only dim (CSS filter is very expensive at scale) */
+	/*
+	 * Opacity-only dim (CSS filter is very expensive at scale).
+	 * Padding zeros / not-yet-reached cascade rows stay grey even when the
+	 * column is hot or force-expanded — only the active cascade cell undims.
+	 */
 	.cell-wrap.dimmed {
 		opacity: 0.22;
 	}
 
 	.cell-wrap.dimmed:hover,
-	.cell-wrap.dimmed:focus-within,
-	.cell-wrap.dimmed.expanded {
+	.cell-wrap.dimmed:focus-within {
 		opacity: 0.75;
 	}
 
-	.cell-wrap.dimmed.active,
-	.cell-wrap.dimmed.column-active:not(.active) {
+	/* forceExpanded alone must not ungrey inert / unchanged nodes */
+	.cell-wrap.dimmed.expanded:not(:hover):not(:focus-within):not(.active) {
+		opacity: 0.22;
+	}
+
+	.cell-wrap.dimmed.active {
 		opacity: 1;
 	}
 
@@ -449,30 +465,49 @@
 		outline-color: #fbbf24;
 	}
 
-	/* ——— Lite stub ——— */
+	/* ——— Lite / closed face (Quickview-style) ——— */
 	.lite-housing {
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		gap: 6px;
-		padding: 0 8px;
-		background: linear-gradient(180deg, #555 0%, #4a4a4a 40%, #404040 100%);
+		padding: 0;
+		background: linear-gradient(180deg, #5a5a5a 0%, #4a4a4a 45%, #3d3d3d 100%);
 	}
 
 	.cell-wrap.active .lite-housing {
 		background: linear-gradient(180deg, #6a5840 0%, #5c4e32 45%, #4a3c28 100%);
 	}
 
+	/* Big red residue badge — the number you read when wires are hidden */
 	.lite-label {
-		font-size: 15px;
-		font-weight: 700;
-		color: #f1f5f9;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		min-width: 2.1em;
+		min-height: 1.55em;
+		padding: 0.12em 0.42em;
+		box-sizing: border-box;
+		font-size: 22px;
+		font-weight: 900;
 		font-variant-numeric: tabular-nums;
-		border: 2px solid #ef4444;
-		border-radius: 5px;
-		padding: 1px 6px;
-		background: #3f1f1f;
-		line-height: 1.2;
+		line-height: 1;
+		color: #fff;
+		background: #2a1010;
+		border: 2.5px solid #ef4444;
+		border-radius: 6px;
+		box-shadow:
+			0 0 0 1px #7f1d1d,
+			0 0 12px #ef444455,
+			inset 0 0 8px #0006;
+		text-shadow: 0 1px 2px #000a;
+	}
+
+	.cell-wrap.active .lite-label {
+		border-color: #fbbf24;
+		box-shadow:
+			0 0 0 1px #a16207,
+			0 0 14px #fbbf2466,
+			inset 0 0 8px #0006;
 	}
 
 	.lite-hint {
@@ -491,10 +526,18 @@
 		opacity: 0.85;
 	}
 
-	.lite-tag {
-		position: static;
-		font-size: 12px;
-		text-shadow: none;
+	/* Lite: left shift tag bigger; right carry/shift-by stays smaller & darker */
+	.lite-housing .shift-tag {
+		font-size: 20px;
+		font-weight: 900;
+		text-shadow: 0 0 10px #7cff4a99, 0 1px 2px #000;
+	}
+
+	.lite-housing .carry-tag {
+		font-size: 14px;
+		font-weight: 800;
+		color: #3d7a3a;
+		text-shadow: 0 1px 2px #000a;
 	}
 
 	/* ——— Full cylinder ——— */
@@ -653,27 +696,31 @@
 		background: #ef444422;
 	}
 
+	/* Left: node shift (0–2) — prominent neon green */
 	.shift-tag {
 		position: absolute;
 		bottom: 3px;
 		left: 5px;
 		z-index: 4;
-		font-size: 14px;
-		font-weight: 800;
+		font-size: 18px;
+		font-weight: 900;
+		line-height: 1;
 		color: #7cff4a;
-		text-shadow: 0 1px 2px #000;
+		text-shadow: 0 0 10px #7cff4aaa, 0 1px 2px #000;
 		pointer-events: none;
 	}
 
+	/* Right: carry / “shifted by” ⌊num/4⌋ — quieter, darker green */
 	.carry-tag {
 		position: absolute;
-		bottom: 3px;
-		right: 5px;
+		bottom: 4px;
+		right: 6px;
 		z-index: 4;
-		font-size: 14px;
+		font-size: 13px;
 		font-weight: 800;
-		color: #6b9b78;
-		text-shadow: 0 1px 2px #000;
+		line-height: 1;
+		color: #3d7a3a;
+		text-shadow: 0 1px 2px #000a;
 		pointer-events: none;
 	}
 

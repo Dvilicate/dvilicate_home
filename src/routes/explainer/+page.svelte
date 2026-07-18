@@ -1,5 +1,6 @@
 <script>
 	import { browser } from '$app/environment';
+	import { tick } from 'svelte';
 	import GridCell from '$lib/components/GridCell.svelte';
 	import {
 		allRowBase4Values,
@@ -10,46 +11,63 @@
 		cascadeInstantFromCols,
 		cloneStreams,
 		columnBase3Digits,
-		columnValue,
 		emptyGrid,
 		patchStreams,
 		planMove,
+		resizeStreams,
 		seedNumberIntoGrid,
 		splitOddEven
 	} from '$lib/collatz.js';
 
+	/** Default grid size */
+	const DEFAULT_COLS = 10;
+	const DEFAULT_ROWS = 12;
+
 	/** Grid size */
-	let cols = $state(12);
-	let rows = $state(16);
+	let cols = $state(DEFAULT_COLS);
+	let rows = $state(DEFAULT_ROWS);
 
 	/** Mutable grid: streams[col][row] — left → right */
-	let streams = $state(emptyGrid(12, 16));
+	let streams = $state(emptyGrid(DEFAULT_COLS, DEFAULT_ROWS));
 
 	/** Seed input */
 	let inputStr = $state('29');
 
 	/**
-	 * Cascade direction:
-	 * - left: edited column updates neighbors toward col 0
-	 * - right: toward last column
-	 * - both: left then right
+	 * How cascade animation steps (always cascades left / right→left):
+	 * - instant: jump to final state (no playback)
+	 * - column: one whole column per step
+	 * - row: walk downward row-by-row inside each column
 	 */
-	let direction = $state(/** @type {'left' | 'right' | 'both'} */ ('left'));
-
-	/** Animate cell-by-cell down each column, vs whole column at once */
-	let byRow = $state(true);
+	let animStyle = $state(/** @type {'instant' | 'column' | 'row'} */ ('instant'));
 
 	/**
-	 * Always show full cylinder wires on every cell (like pre-lite UI).
-	 * Off by default for large-grid performance.
+	 * Wire / line view mode:
+	 * - off: closed lite faces only (never show wires)
+	 * - hover: expand full wires for hovered column/row + animating column
+	 * - all: always show full wire mesh on every cell (heavier on large grids)
 	 */
-	let showAllConnections = $state(false);
+	let wireMode = $state(/** @type {'off' | 'hover' | 'all'} */ ('off'));
 
 	/** Column under the pointer — expand full wires for the whole column */
 	let hoverCol = $state(/** @type {number | null} */ (null));
 
-	/** ms between cascade frames */
+	/** Row under the pointer — highlight full row + expand wires */
+	let hoverRow = $state(/** @type {number | null} */ (null));
+
+	/** ms between cascade frames (column / row styles) */
 	let speedMs = $state(120);
+
+	/** Visual scale of the grid (1 = 100%) */
+	let gridScale = $state(1);
+
+	/** True while a fit measurement is in progress (avoid re-entry) */
+	let fitting = false;
+
+	/** @type {HTMLElement | null} */
+	let gridWrapEl = $state(null);
+	/** @type {HTMLElement | null} */
+	let gridEl = $state(null);
 
 	/** True while a cascade animation is playing */
 	let animating = $state(false);
@@ -68,9 +86,6 @@
 	/** Generation token so stale animations abort */
 	let animGen = 0;
 
-	const PRESETS = [7, 12, 17, 27, 29, 41];
-
-	let colValues = $derived(streams.map((s) => columnValue(s)));
 	let colMeta = $derived(
 		streams.map((s) => {
 			const info = columnBase3Digits(s);
@@ -78,7 +93,28 @@
 			return { ...info, ...split };
 		})
 	);
-	let rowBase4 = $derived(allRowBase4Values(streams));
+	let rowBase4 = $derived(
+		allRowBase4Values(streams).map((rv) => {
+			const split = splitOddEven(rv.value);
+			return { ...rv, ...split };
+		})
+	);
+
+	/**
+	 * Full decimal → odd core after dividing out 2s, e.g. "68→17".
+	 * Already-odd (or zero) stays a single number.
+	 * @param {number} value
+	 * @param {number} [odd]
+	 * @param {number} [twos]
+	 */
+	function formatDecOdd(value, odd, twos) {
+		const v = Math.abs(Math.floor(Number(value) || 0));
+		const split = odd === undefined || twos === undefined ? splitOddEven(v) : null;
+		const o = Math.abs(Math.floor(Number(odd ?? split?.odd ?? v) || 0));
+		const t = Math.floor(Number(twos ?? split?.twos ?? 0) || 0);
+		if (v === 0 || t <= 0 || v === o) return String(v);
+		return `${v}→${o}`;
+	}
 
 	// ——— digit editors (surgical; draft kept while focused) ———
 	let editingCol = $state(/** @type {number | null} */ (null));
@@ -116,7 +152,7 @@
 		if (cleaned.length === 0) {
 			colFresh = true;
 			applyColumnBase3Digits(grid[colIndex], '', { replace: true });
-			cascadeInstant(grid, colIndex, direction);
+			cascadeInstant(grid, colIndex, 'left');
 			patchStreams(streams, grid);
 			hotCol = colIndex;
 			hotRow = null;
@@ -127,7 +163,7 @@
 		const result = applyColumnBase3Digits(grid[colIndex], cleaned, {
 			replace: colFresh
 		});
-		cascadeInstant(grid, colIndex, direction);
+		cascadeInstant(grid, colIndex, 'left');
 		patchStreams(streams, grid);
 		hotCol = colIndex;
 		hotRow = result.changedRows[0] ?? null;
@@ -174,13 +210,103 @@
 		const result = applyRowBase4Digits(grid, rowIndex, cleaned, {
 			replace: rowFresh
 		});
-		cascadeInstantFromCols(grid, result.changedCols, direction);
+		cascadeInstantFromCols(grid, result.changedCols, 'left');
 		patchStreams(streams, grid);
 		hotCol = result.changedCols[0] ?? null;
 		hotRow = rowIndex;
 		const mode =
 			result.mode === 'replace' ? 'fresh write' : result.mode === 'clear' ? 'clear' : 'patch';
 		status = `Row ${rowIndex} base-4 “${cleaned}”₄ (${mode}${result.changedCols.length ? ` · cols ${result.changedCols.join(',')}` : ''}).`;
+	}
+
+	/**
+	 * Shared cascade runner for drag / ripple.
+	 * @param {number} streamId
+	 * @param {number} rowIndex
+	 * @param {number} delta
+	 * @param {string} startStatus
+	 */
+	function runCascade(streamId, rowIndex, delta, startStatus) {
+		const frames = planMove(streams, streamId, rowIndex, delta, {
+			byRow: animStyle === 'row',
+			direction: 'left'
+		});
+		if (!frames.length) return;
+
+		// Instant: apply final frame only (no playback)
+		if (animStyle === 'instant') {
+			stopAnim();
+			const last = frames[frames.length - 1];
+			patchStreams(streams, last.streams);
+			hotCol = null;
+			hotRow = null;
+			status = `${startStatus} · instant (${frames.length} steps collapsed).`;
+			return;
+		}
+
+		const restart = animating ? ' · restart' : '';
+		playFrames(frames, `${startStatus}${restart}…`);
+	}
+
+	/** Wait two animation frames so layout (incl. zoom) has settled. */
+	function nextFrame() {
+		return new Promise((resolve) => {
+			requestAnimationFrame(() => requestAnimationFrame(resolve));
+		});
+	}
+
+	/**
+	 * Fit the grid into the visible wrap area in one shot.
+	 * Measures the grid at zoom=1 (DOM), then applies a single scale factor.
+	 * Caps at 100% — never enlarges past natural size.
+	 */
+	async function autoscaleToFit() {
+		if (!browser || fitting) return;
+		fitting = true;
+		try {
+			// Measure unscaled geometry so a second click is a no-op
+			gridScale = 1;
+			await tick();
+			await nextFrame();
+
+			if (!gridWrapEl || !gridEl) return;
+
+			// Padding inside the wrap; keep a small inset so edges aren't clipped
+			const pad = 8;
+			const availW = Math.max(80, gridWrapEl.clientWidth - pad);
+			const availH = Math.max(80, gridWrapEl.clientHeight - pad);
+
+			// At zoom 1, scroll size is the full natural content box
+			// (offset can be clamped by the wrap; scroll includes overflow)
+			const naturalW = Math.max(1, gridEl.scrollWidth);
+			const naturalH = Math.max(1, gridEl.scrollHeight);
+
+			const fit = Math.min(availW / naturalW, availH / naturalH, 1);
+			const next = Math.round(Math.max(0.2, Math.min(1, fit)) * 100) / 100;
+			gridScale = next;
+
+			await tick();
+			await nextFrame();
+
+			// If a scrollbar appeared/disappeared, re-measure once at the new scale
+			// by computing from the unscaled size we already have (idempotent).
+			const availW2 = Math.max(80, gridWrapEl.clientWidth - pad);
+			const availH2 = Math.max(80, gridWrapEl.clientHeight - pad);
+			const fit2 = Math.min(availW2 / naturalW, availH2 / naturalH, 1);
+			const next2 = Math.round(Math.max(0.2, Math.min(1, fit2)) * 100) / 100;
+			if (next2 !== next) gridScale = next2;
+
+			status = `Scale ${Math.round(gridScale * 100)}% (fit ${cols}×${rows}).`;
+		} finally {
+			fitting = false;
+		}
+	}
+
+	/** @param {number} v */
+	function setGridScale(v) {
+		const n = Number(v);
+		if (!Number.isFinite(n)) return;
+		gridScale = Math.round(Math.max(0.2, Math.min(1.5, n)) * 100) / 100;
 	}
 
 	/** @param {number} rowIndex */
@@ -267,17 +393,12 @@
 	 */
 	function handleMove(streamId, rowIndex, dir) {
 		const delta = dir === 'right' ? 1 : -1;
-		// Base plan on whatever is currently on screen (mid-cascade is fine:
-		// planMove rewrites neighbors in the cascade direction from this column).
-		const frames = planMove(streams, streamId, rowIndex, delta, {
-			byRow,
-			direction
-		});
-		if (!frames.length) return;
-		const restart = animating ? ' · restart' : '';
-		playFrames(
-			frames,
-			`Moved col ${streamId} row ${rowIndex} ${dir} — cascading ${direction}${restart}…`
+		// Mid-cascade is fine: planMove rewrites neighbors from this column.
+		runCascade(
+			streamId,
+			rowIndex,
+			delta,
+			`Moved col ${streamId} row ${rowIndex} ${dir} — ${animStyle}`
 		);
 	}
 
@@ -285,8 +406,8 @@
 		stopAnim();
 		const n = parseInt(String(inputStr), 10);
 		if (!Number.isFinite(n) || n < 0) return;
-		const c = Math.min(40, Math.max(3, parseInt(String(cols), 10) || 12));
-		const r = Math.min(40, Math.max(4, parseInt(String(rows), 10) || 16));
+		const c = Math.min(40, Math.max(3, parseInt(String(cols), 10) || DEFAULT_COLS));
+		const r = Math.min(40, Math.max(4, parseInt(String(rows), 10) || DEFAULT_ROWS));
 		cols = c;
 		rows = r;
 		const grid = emptyGrid(c, r);
@@ -295,23 +416,15 @@
 		status = `Seeded ${n} (${baseConvert(n, 10, 3)}₃) into the rightmost column, cascaded left. Drag any node to ripple.`;
 	}
 
-	/** @param {number} n */
-	function loadPreset(n) {
-		inputStr = String(n);
-		loadNumber();
-	}
-
 	function resizeGrid() {
 		stopAnim();
-		const c = Math.min(40, Math.max(3, parseInt(String(cols), 10) || 12));
-		const r = Math.min(40, Math.max(4, parseInt(String(rows), 10) || 16));
+		const c = Math.min(40, Math.max(3, parseInt(String(cols), 10) || DEFAULT_COLS));
+		const r = Math.min(40, Math.max(4, parseInt(String(rows), 10) || DEFAULT_ROWS));
 		cols = c;
 		rows = r;
-		const grid = emptyGrid(c, r);
-		const n = parseInt(String(inputStr), 10);
-		if (Number.isFinite(n) && n >= 0) seedNumberIntoGrid(grid, n);
-		streams = grid;
-		status = `Grid ${c}×${r}.`;
+		// Grow left / bottom; shrink removes left / bottom — keep existing content
+		streams = resizeStreams(streams, c, r);
+		status = `Grid ${c}×${r} (new cols left · new rows bottom).`;
 	}
 
 	function clearGrid() {
@@ -326,10 +439,7 @@
 	 * @param {number} streamId
 	 */
 	function cascadeFrom(streamId) {
-		const frames = planMove(streams, streamId, 0, 0, { byRow, direction });
-		if (!frames.length) return;
-		const restart = animating ? ' · restart' : '';
-		playFrames(frames, `Ripple from col ${streamId} (${direction})${restart}…`);
+		runCascade(streamId, 0, 0, `Ripple from col ${streamId} — ${animStyle}`);
 	}
 
 	let booted = $state(false);
@@ -337,6 +447,18 @@
 		if (!browser || booted) return;
 		booted = true;
 		loadNumber();
+		// Fit as soon as the grid has laid out (retry briefly if wrap not ready)
+		(async () => {
+			for (let i = 0; i < 8; i++) {
+				await tick();
+				await nextFrame();
+				if (gridWrapEl && gridEl && gridWrapEl.clientWidth > 0) {
+					await autoscaleToFit();
+					return;
+				}
+			}
+			await autoscaleToFit();
+		})();
 	});
 </script>
 
@@ -346,12 +468,11 @@
 
 <div class="page">
 	<header class="top">
-		<div class="brand">
-			<h1>Collatz residue grid</h1>
-			<p class="sub">
-				Each cell is a rotating cylinder section (like the explainer): drag to turn it — the strip
-				slides and tilts around the Y axis while wires stay mapped to their numbers. The column
-				settles, then the cascade ripples. Edits are never blocked.
+		<div class="top-bar">
+			<a class="home-btn" href="/" title="Back to workspace home">← Home</a>
+			<h1 class="title">Collatz residue grid</h1>
+			<p class="sub" title="Drag nodes to rotate; cascade ripples through remaining columns. Edits never block.">
+				Drag to rotate · cascade ripples · edits never blocked
 			</p>
 		</div>
 
@@ -364,51 +485,67 @@
 		>
 			<label class="field">
 				<span>Seed n</span>
-				<input type="number" min="0" bind:value={inputStr} />
+				<input class="no-spin" type="number" min="0" bind:value={inputStr} />
 			</label>
-			<button type="submit" class="btn primary">Load into right col</button>
+			<button type="submit" class="btn primary">Load</button>
 
 			<label class="field narrow">
 				<span>Cols</span>
-				<input type="number" min="3" max="40" bind:value={cols} onchange={resizeGrid} />
+				<input
+					class="no-spin"
+					type="number"
+					min="3"
+					max="40"
+					bind:value={cols}
+					onchange={resizeGrid}
+				/>
 			</label>
 			<label class="field narrow">
 				<span>Rows</span>
-				<input type="number" min="4" max="40" bind:value={rows} onchange={resizeGrid} />
-			</label>
-		</form>
-
-		<div class="controls secondary">
-			<label class="field">
-				<span>Cascade</span>
-				<select bind:value={direction}>
-					<option value="left">← Left (to col 0)</option>
-					<option value="right">Right → (to last col)</option>
-					<option value="both">Both directions</option>
-				</select>
+				<input
+					class="no-spin"
+					type="number"
+					min="4"
+					max="40"
+					bind:value={rows}
+					onchange={resizeGrid}
+				/>
 			</label>
 
-			<label class="check">
-				<input type="checkbox" bind:checked={byRow} />
-				Animate row-by-row inside each column
-			</label>
+			<span class="ctrl-sep" aria-hidden="true"></span>
 
-			<button
-				type="button"
-				class="btn"
-				class:primary={showAllConnections}
-				onclick={() => (showAllConnections = !showAllConnections)}
-				title="Always show full wire mesh on every cell (heavier on large grids). When off, hover a column to reveal its connections."
+			<fieldset
+				class="anim-opts"
+				title="Cascade always goes left (right→left). Instant = no playback · Column = one column per step · Row = walk downward inside each column"
 			>
-				{showAllConnections ? 'Connections: all' : 'Connections: auto'}
-			</button>
+				<legend>Animate</legend>
+				<label class="radio">
+					<input type="radio" name="animStyle" value="instant" bind:group={animStyle} />
+					Instant
+				</label>
+				<label class="radio">
+					<input type="radio" name="animStyle" value="column" bind:group={animStyle} />
+					Column
+				</label>
+				<label class="radio">
+					<input type="radio" name="animStyle" value="row" bind:group={animStyle} />
+					Row
+				</label>
+			</fieldset>
 
-			<label class="field narrow">
-				<span>Speed ms</span>
-				<input type="number" min="30" max="800" step="10" bind:value={speedMs} />
+			<label class="field narrow" title="Milliseconds between animation frames">
+				<span>ms</span>
+				<input
+					class="no-spin"
+					type="number"
+					min="30"
+					max="800"
+					step="10"
+					bind:value={speedMs}
+					disabled={animStyle === 'instant'}
+				/>
 			</label>
 
-			<button type="button" class="btn" onclick={clearGrid}>Clear</button>
 			<button
 				type="button"
 				class="btn"
@@ -416,18 +553,50 @@
 				disabled={!animating}
 				title="Stop the cascade without applying further frames"
 			>
-				Stop anim
+				Stop
 			</button>
-		</div>
 
-		<div class="presets">
-			<span class="muted">Seed:</span>
-			{#each PRESETS as p}
-				<button type="button" class="chip" onclick={() => loadPreset(p)}>
-					{p}
-				</button>
-			{/each}
-		</div>
+			<span class="ctrl-sep" aria-hidden="true"></span>
+
+			<fieldset
+				class="wire-mode"
+				title="Connection line views: Hidden = closed nodes only · On hover = column/row · All = every cell (heavier)."
+			>
+				<legend>Lines</legend>
+				<label class="radio">
+					<input type="radio" name="wireMode" value="off" bind:group={wireMode} />
+					Hidden
+				</label>
+				<label class="radio">
+					<input type="radio" name="wireMode" value="hover" bind:group={wireMode} />
+					On hover
+				</label>
+				<label class="radio">
+					<input type="radio" name="wireMode" value="all" bind:group={wireMode} />
+					All
+				</label>
+			</fieldset>
+
+			<label
+				class="field scale-field"
+				title="Zoom the grid. Auto-fits on load; Fit remeasures at 100% then scales once."
+			>
+				<span>Scale {Math.round(gridScale * 100)}%</span>
+				<input
+					type="range"
+					min="0.2"
+					max="1.5"
+					step="0.05"
+					value={gridScale}
+					oninput={(e) => setGridScale(e.currentTarget.value)}
+				/>
+			</label>
+			<button type="button" class="btn" onclick={autoscaleToFit} title="Fit grid to view">
+				Fit
+			</button>
+
+			<button type="button" class="btn" onclick={clearGrid}>Clear</button>
+		</form>
 
 		<div class="status" class:busy={animating}>
 			{#if animating}
@@ -438,40 +607,36 @@
 	</header>
 
 	<section class="legend">
-		<span><i class="swatch shift"></i> green dashed = other shift options (0–2)</span>
-		<span><i class="swatch carry"></i> carry <code>&lt;n</code> = ⌊num/4⌋ → left</span>
-		<span><i class="swatch hot"></i> red = selected wire to its target slot</span>
-		<span class="muted">Drag to rotate · keys 1–3 pick shift · hover a column for full wires</span>
+		<span><i class="swatch shift"></i> shift options</span>
+		<span><i class="swatch carry"></i> carry <code>&lt;n</code></span>
+		<span><i class="swatch hot"></i> selected wire</span>
+		<span class="muted">1–3 pick shift · green/red floats = decimal→odd</span>
 	</section>
 
-	<div class="grid-wrap">
+	<div class="grid-wrap" bind:this={gridWrapEl}>
 		<div
 			class="grid"
-			style="grid-template-columns: repeat({streams.length}, var(--col-w)) var(--row-panel-w);"
+			bind:this={gridEl}
+			style="
+				--grid-zoom: {gridScale};
+				grid-template-columns: repeat({streams.length}, var(--col-w)) var(--row-panel-w);
+			"
 		>
 			{#each streams as stream, colIndex}
-				{@const val = colValues[colIndex]}
 				{@const meta = colMeta[colIndex]}
 				<div
 					class="column"
 					class:hot={hotCol === colIndex}
+					class:col-hovered={hoverCol === colIndex}
 					class:source-hint={colIndex === streams.length - 1}
 				>
 					<header class="col-head">
 						<div class="col-idx">col {colIndex}</div>
-						<div
-							class="col-val"
-							title={meta.twos
-								? `${meta.value} = ${meta.odd} × 2^${meta.twos} (show odd)`
-								: `Base-3 value ${meta.value}`}
+						<!-- Hero: base-3 digit string (neon green) + decimal reading -->
+						<label
+							class="digit-edit col-b3"
+							title="Base-3 digits of this column (0–2). Edit to patch nodes; clear then retype for a fresh number."
 						>
-							<span class="odd-num">{meta.odd}</span>
-							<!-- Always reserve this line so /2^n appearing doesn't reflow the header -->
-							<span class="twos-tag" class:hidden={meta.twos <= 0}>
-								{#if meta.twos > 0}/2^{meta.twos}{:else}&nbsp;{/if}
-							</span>
-						</div>
-						<label class="digit-edit" title="Edit base-3 digits (0–2). Patch in place; clear then retype for a fresh number.">
 							<span class="digit-edit-label">base 3</span>
 							<span class="digit-edit-row">
 								<input
@@ -489,12 +654,21 @@
 										if (e.key === 'Enter') e.currentTarget.blur();
 									}}
 								/>
-								<span class="rad-tag">₃</span>
+								<span class="rad-tag rad-3">₃</span>
 							</span>
 						</label>
-						<div class="col-meta">
-							<span title="Full value before odd-reduction">{val}</span>
-							<span>{val.toString(4)}₄</span>
+						<div
+							class="col-val"
+							title={meta.twos
+								? `${meta.value} = ${meta.odd} × 2^${meta.twos} (show odd)`
+								: `Base-3 “${meta.displayStr || '0'}”₃ = ${meta.value}`}
+						>
+							<span class="dec-eq">=</span>
+							<span class="odd-num">{meta.odd}</span>
+							<!-- Always reserve this line so /2^n appearing doesn't reflow the header -->
+							<span class="twos-tag" class:hidden={meta.twos <= 0}>
+								{#if meta.twos > 0}/2^{meta.twos}{:else}&nbsp;{/if}
+							</span>
 						</div>
 						<button
 							type="button"
@@ -512,22 +686,90 @@
 						onmouseenter={() => (hoverCol = colIndex)}
 						onmouseleave={() => {
 							if (hoverCol === colIndex) hoverCol = null;
+							hoverRow = null;
 						}}
 					>
 						{#each stream as cell, rowIndex (cell.id)}
-							{@const meta = colMeta[colIndex]}
+							{@const cMeta = colMeta[colIndex]}
+							{@const rMeta = rowBase4[rowIndex]}
 							{@const inertZero =
-								meta.last < 0 || rowIndex < meta.lead || rowIndex > meta.last}
-							<div class="row-slot" class:inert={inertZero}>
+								cMeta.last < 0 || rowIndex < cMeta.lead || rowIndex > cMeta.last}
+							<!--
+								During cascade: keep nodes grey until the walk reaches them, and
+								never ungrey padding zeros — only digits that are part of the number.
+							-->
+							{@const animAhead =
+								animating &&
+								hotCol === colIndex &&
+								hotRow != null &&
+								rowIndex > hotRow}
+							{@const partOfNumber = !inertZero}
+							{@const isDimmed = inertZero || animAhead}
+							<!-- Top active node of the column (or row 0 when empty) — anchor for green decimal -->
+							{@const isTopActive =
+								cMeta.last >= 0 ? rowIndex === cMeta.lead : rowIndex === 0}
+							<!-- Last active node of the row (last non-zero base-4 digit; col 0 if empty) -->
+							{@const lastActiveCol =
+								rMeta && rMeta.lastCol >= 0 ? rMeta.lastCol : 0}
+							{@const isLastActive = colIndex === lastActiveCol}
+							{@const rowLit = hoverRow === rowIndex || hotRow === rowIndex}
+							{@const colDecLabel = formatDecOdd(cMeta.value, cMeta.odd, cMeta.twos)}
+							{@const rowDecLabel = formatDecOdd(
+								rMeta?.value ?? 0,
+								rMeta?.odd,
+								rMeta?.twos
+							)}
+							<!-- svelte-ignore a11y_no_static_element_interactions -->
+							<div
+								class="row-slot"
+								class:inert={isDimmed}
+								class:top-active={isTopActive}
+								class:last-active={isLastActive}
+								class:row-hovered={hoverRow === rowIndex}
+								class:row-hot={hotRow === rowIndex}
+								onmouseenter={() => (hoverRow = rowIndex)}
+								onmouseleave={() => {
+									if (hoverRow === rowIndex) hoverRow = null;
+								}}
+							>
+								<!-- Green: column decimal → odd core above every top active node -->
+								{#if isTopActive}
+									<span
+										class="float-dec float-dec-col"
+										class:lit={hoverCol === colIndex || hotCol === colIndex}
+										title="Column base-3 “{cMeta.displayStr || '0'}”₃ = {cMeta.value}{cMeta.twos > 0
+											? ` = ${cMeta.odd} × 2^${cMeta.twos}`
+											: ''} (decimal → odd)"
+									>
+										{colDecLabel}
+									</span>
+								{/if}
+								<!-- Red: row decimal → odd core after the last active node of the row -->
+								{#if isLastActive}
+									<span
+										class="float-dec float-dec-row"
+										class:lit={rowLit}
+										title="Row base-4 “{rMeta?.base4 || '0'}”₄ = {rMeta?.value ?? 0}{rMeta?.twos > 0
+											? ` = ${rMeta.odd} × 2^${rMeta.twos}`
+											: ''} (decimal → odd)"
+									>
+										{rowDecLabel}
+									</span>
+								{/if}
 								<span class="row-idx">{rowIndex}</span>
 								<GridCell
 									{cell}
-									active={hotCol === colIndex && (hotRow === null || hotRow === rowIndex)}
-									columnActive={hotCol === colIndex}
-									dimmed={inertZero}
-									forceExpanded={showAllConnections ||
-										hoverCol === colIndex ||
-										(animating && hotCol === colIndex)}
+									active={hotCol === colIndex &&
+										!isDimmed &&
+										(hotRow === null ? partOfNumber : hotRow === rowIndex)}
+									columnActive={hotCol === colIndex || hoverCol === colIndex}
+									dimmed={isDimmed}
+									wiresHidden={wireMode === 'off'}
+									forceExpanded={wireMode === 'all' ||
+										(wireMode === 'hover' &&
+											(hoverCol === colIndex ||
+												hoverRow === rowIndex ||
+												(animating && hotCol === colIndex && !isDimmed)))}
 									onMove={(dir) => handleMove(colIndex, rowIndex, dir)}
 								/>
 							</div>
@@ -552,13 +794,14 @@
 						<div
 							class="row-slot panel-slot"
 							class:hot-row={hotRow === rowIndex}
+							class:row-hovered={hoverRow === rowIndex}
 							class:has-value={rv.value !== 0}
 						>
 							<span class="row-idx">{rowIndex}</span>
 							<div class="base4-cell">
 								<label
 									class="digit-edit row-digit-edit"
-									title="Edit base-4 digits (0–3). Patch nodes in place; clear then retype for a fresh number."
+									title="Base-4 digits across the row (0–3). Edit to patch nodes; clear then retype for a fresh number."
 								>
 									<span class="digit-edit-row">
 										<input
@@ -576,17 +819,20 @@
 												if (e.key === 'Enter') e.currentTarget.blur();
 											}}
 										/>
-										<span class="rad-tag">₄</span>
+										<span class="rad-tag rad-4">₄</span>
 									</span>
 								</label>
 								<div
 									class="b4-result"
-									title={rv.halved ? `${rv.value} ÷ 2 (ends in 2₄)` : String(rv.value || 0)}
+									title={rv.halved
+										? `“${rv.base4 || '0'}”₄ = ${rv.value} ÷ 2 (ends in 2₄) → ${rv.result}`
+										: `“${rv.base4 || '0'}”₄ = ${rv.result}`}
 								>
+									<span class="eq">=</span>
 									{#if rv.halved}
 										<span class="raw">{rv.value}</span>
 										<span class="div2">÷2</span>
-										<span class="eq">=</span>
+										<span class="eq">→</span>
 									{/if}
 									<span class="n">{rv.result}</span>
 								</div>
@@ -615,24 +861,32 @@
 					(<code>num = (prev%4)·3 + shift</code>), then the tail “drops to zero” under the edited row.
 				</li>
 				<li>
-					<strong>Cascade</strong> — the next column is rewritten from this one
-					(<code>left.shift[i] = ⌊num[i]/4⌋</code> when cascading left), settles, then the next
-					column, and so on until the last column in that direction. Animation shows each step; enable
-					<strong>row-by-row</strong> to watch the update walk down inside a column. Leading zeros that
-					do not change are skipped; once trailing zeros have nothing left to update, the highlight
-					jumps to the next column.
+					<strong>Cascade</strong> — always right→left
+					(<code>left.shift[i] = ⌊num[i]/4⌋</code>). <strong>Animate</strong>: Instant (no
+					playback), Column (one column per step), or Row (walk downward inside each column).
+					Leading zeros that do not change are skipped; trailing inert zeros jump the highlight to
+					the next column.
 				</li>
 				<li>
 					<strong>Seed n</strong> loads base-3 digits into the <em>rightmost</em> column and
-					instantly (then you can drag from anywhere). Column headers show the odd part of each
-					column’s base-3 value (÷2 until odd), with editable base-3 digits.
+					cascades left instantly (then you can drag from anywhere). Column headers show the odd
+					part of each column’s base-3 value (÷2 until odd), with editable base-3 digits.
 				</li>
 				<li>
 					<strong>Editable base 3 / base 4</strong> — column headers edit ternary digits (0–2);
 					the right panel edits each row’s base-4 digits (0–3 from <code>num % 4</code>). Edits
 					patch the matching nodes only (change / append / delete digits). Clear the field
 					completely, then type again, to rewrite the column or row from scratch. Neighbors update
-					instantly using the current cascade direction.
+					instantly leftward.
+				</li>
+				<li>
+					<strong>Scale</strong> — auto-fits on load; use the slider or Fit anytime. Growing cols
+					adds empty columns on the <em>left</em>; growing rows adds empty rows at the
+					<em>bottom</em>.
+				</li>
+				<li>
+					<strong>Drag</strong> only changes that node’s shift (0–2). It no longer carries into
+					nodes above.
 				</li>
 				<li>
 					<strong>Right panel</strong> — for each row, read <code>num % 4</code> across columns
@@ -659,43 +913,85 @@
 	}
 
 	.page {
-		padding: 16px 18px 48px;
+		padding: 8px 12px 32px;
 	}
 
-	.brand h1 {
-		margin: 0;
-		font-size: 1.4rem;
+	.top {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+		margin-bottom: 4px;
+	}
+
+	.top-bar {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: 8px 12px;
+	}
+
+	.home-btn {
+		display: inline-flex;
+		align-items: center;
+		padding: 4px 10px;
+		border-radius: 6px;
+		border: 1px solid #334155;
+		background: #1e293b;
+		color: #e2e8f0;
+		text-decoration: none;
+		font-size: 0.82rem;
+		font-weight: 600;
+		line-height: 1.2;
+		flex-shrink: 0;
+	}
+
+	.home-btn:hover {
+		background: #334155;
+		border-color: #38bdf8;
 		color: #f8fafc;
 	}
 
+	.title {
+		margin: 0;
+		font-size: 1.15rem;
+		color: #f8fafc;
+		line-height: 1.2;
+	}
+
 	.sub {
-		margin: 4px 0 12px;
-		color: #94a3b8;
-		max-width: 70ch;
-		line-height: 1.45;
-		font-size: 0.95rem;
+		margin: 0;
+		color: #64748b;
+		font-size: 0.78rem;
+		line-height: 1.3;
+		flex: 1 1 12rem;
+		min-width: 0;
 	}
 
 	.controls {
 		display: flex;
 		flex-wrap: wrap;
-		gap: 10px;
+		gap: 6px 8px;
 		align-items: flex-end;
-		margin-bottom: 10px;
+		padding: 6px 8px;
+		background: #111827;
+		border-radius: 8px;
+		border: 1px solid #1f2937;
 	}
 
-	.controls.secondary {
-		padding: 10px;
-		background: #111827;
-		border-radius: 10px;
-		border: 1px solid #1f2937;
+	.ctrl-sep {
+		width: 1px;
+		align-self: stretch;
+		min-height: 28px;
+		background: #334155;
+		margin: 0 2px;
+		flex-shrink: 0;
 	}
 
 	.field {
 		display: flex;
 		flex-direction: column;
-		gap: 4px;
-		font-size: 0.7rem;
+		gap: 2px;
+		font-size: 0.62rem;
 		color: #94a3b8;
 		text-transform: uppercase;
 		letter-spacing: 0.04em;
@@ -703,40 +999,118 @@
 
 	.field input,
 	.field select {
-		font-size: 1rem;
-		padding: 7px 10px;
-		border-radius: 8px;
+		font-size: 0.88rem;
+		padding: 5px 8px;
+		border-radius: 6px;
 		border: 1px solid #334155;
 		background: #0f172a;
 		color: #f1f5f9;
 		min-width: 0;
+		height: 30px;
+		box-sizing: border-box;
 	}
 
 	.field.narrow input {
-		width: 72px;
+		width: 56px;
 	}
 
 	.field input {
-		width: 120px;
+		width: 88px;
 	}
 
-	.check {
+	.field select {
+		width: auto;
+		max-width: 7.5rem;
+	}
+
+	/* Hide number spinners (seed / cols / rows / ms) */
+	.no-spin {
+		-moz-appearance: textfield;
+		appearance: textfield;
+	}
+	.no-spin::-webkit-outer-spin-button,
+	.no-spin::-webkit-inner-spin-button {
+		-webkit-appearance: none;
+		margin: 0;
+	}
+
+	.wire-mode,
+	.anim-opts {
 		display: flex;
+		flex-wrap: wrap;
 		align-items: center;
-		gap: 6px;
-		font-size: 0.9rem;
+		gap: 2px 8px;
+		margin: 0;
+		padding: 2px 8px 4px;
+		border: 1px solid #334155;
+		border-radius: 6px;
+		background: #0f172a;
 		color: #cbd5e1;
-		padding-bottom: 6px;
+		font-size: 0.8rem;
+	}
+
+	.wire-mode legend,
+	.anim-opts legend {
+		padding: 0 3px;
+		font-size: 0.62rem;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		color: #64748b;
+	}
+
+	.wire-mode .radio,
+	.anim-opts .radio {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		cursor: pointer;
+		user-select: none;
+		white-space: nowrap;
+	}
+
+	.wire-mode .radio input,
+	.anim-opts .radio input {
+		accent-color: #38bdf8;
+		cursor: pointer;
+		margin: 0;
+	}
+
+	.wire-mode .radio:has(input:checked),
+	.anim-opts .radio:has(input:checked) {
+		color: #e2e8f0;
+		font-weight: 700;
+	}
+
+	.scale-field {
+		min-width: 7.5rem;
+	}
+
+	.scale-field > span {
+		text-transform: none;
+		letter-spacing: 0;
+		font-variant-numeric: tabular-nums;
+	}
+
+	.scale-field input[type='range'] {
+		width: 96px;
+		height: 30px;
+		padding: 0;
+		border: none;
+		background: transparent;
+		accent-color: #38bdf8;
+		cursor: pointer;
 	}
 
 	.btn {
 		border: 1px solid #334155;
 		background: #1e293b;
 		color: #e2e8f0;
-		border-radius: 8px;
-		padding: 8px 12px;
-		font-size: 0.92rem;
+		border-radius: 6px;
+		padding: 5px 10px;
+		font-size: 0.82rem;
 		cursor: pointer;
+		height: 30px;
+		box-sizing: border-box;
 	}
 
 	.btn:hover:not(:disabled) {
@@ -755,34 +1129,6 @@
 		font-weight: 700;
 	}
 
-	.presets {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 6px;
-		align-items: center;
-		margin: 8px 0;
-	}
-
-	.chip {
-		border: 1px solid #334155;
-		background: #0f172a;
-		color: #cbd5e1;
-		border-radius: 999px;
-		padding: 4px 12px;
-		cursor: pointer;
-		font-size: 0.85rem;
-	}
-
-	.chip:hover:not(:disabled) {
-		background: #fbbf24;
-		color: #111;
-		border-color: #fbbf24;
-	}
-
-	.chip:disabled {
-		opacity: 0.45;
-	}
-
 	.muted {
 		color: #64748b;
 	}
@@ -790,14 +1136,15 @@
 	.status {
 		display: flex;
 		align-items: center;
-		gap: 8px;
-		padding: 8px 12px;
-		border-radius: 8px;
+		gap: 6px;
+		padding: 4px 10px;
+		border-radius: 6px;
 		background: #0f172a;
 		border: 1px solid #1e293b;
-		font-size: 0.9rem;
+		font-size: 0.8rem;
 		color: #cbd5e1;
-		min-height: 1.4em;
+		min-height: 1.2em;
+		line-height: 1.3;
 	}
 
 	.status.busy {
@@ -806,11 +1153,12 @@
 	}
 
 	.pulse {
-		width: 8px;
-		height: 8px;
+		width: 7px;
+		height: 7px;
 		border-radius: 50%;
 		background: #fbbf24;
 		animation: pulse 0.8s ease infinite;
+		flex-shrink: 0;
 	}
 
 	@keyframes pulse {
@@ -828,10 +1176,10 @@
 	.legend {
 		display: flex;
 		flex-wrap: wrap;
-		gap: 14px;
-		font-size: 0.8rem;
+		gap: 8px 12px;
+		font-size: 0.72rem;
 		color: #94a3b8;
-		margin: 12px 0;
+		margin: 4px 0 8px;
 	}
 
 	.legend code {
@@ -870,8 +1218,8 @@
 		background: #222;
 		border: 1px solid #333;
 		border-radius: 12px;
-		padding: 12px;
-		max-height: calc(100vh - 280px);
+		padding: 10px;
+		max-height: calc(100vh - 148px);
 	}
 
 	.grid {
@@ -880,6 +1228,8 @@
 		width: max-content;
 		min-width: 100%;
 		align-items: start;
+		/* zoom scales layout box too (scrollbars stay correct) */
+		zoom: var(--grid-zoom, 1);
 	}
 
 	/* Sticky right panel — stays visible while scrolling the grid horizontally */
@@ -920,13 +1270,14 @@
 		contain-intrinsic-size: auto 78px;
 	}
 
-	.panel-slot.hot-row .base4-cell {
+	.panel-slot.hot-row .base4-cell,
+	.panel-slot.row-hovered .base4-cell {
 		outline-color: #fbbf24;
 		background: #5c4e32;
 	}
 
 	.panel-slot.has-value .b4-result .n {
-		color: #f8fafc;
+		color: #fecaca;
 	}
 
 	.base4-cell {
@@ -934,15 +1285,15 @@
 		min-width: 0;
 		box-sizing: border-box;
 		padding: 4px 6px;
-		background: #2a2a2a;
-		border: 1px solid #2a2a2a;
+		background: #1a1214;
+		border: 1px solid #3f1f1f;
 		outline: 2px solid transparent;
 		border-radius: 4px;
 		font-variant-numeric: tabular-nums;
 		display: flex;
 		flex-direction: column;
 		justify-content: center;
-		gap: 2px;
+		gap: 3px;
 		/* Match residue-strip cell height (~labels + wires) */
 		min-height: 74px;
 	}
@@ -951,46 +1302,62 @@
 		display: flex;
 		flex-wrap: wrap;
 		align-items: baseline;
+		justify-content: center;
 		gap: 3px;
-		font-size: 0.85rem;
+		font-size: 0.9rem;
 		font-weight: 800;
-		color: #94a3b8;
+		color: #fca5a5;
 		line-height: 1.2;
 	}
 
 	.b4-result .raw {
-		color: #64748b;
-		font-weight: 600;
-		font-size: 0.75rem;
+		color: #f87171;
+		font-weight: 700;
+		font-size: 0.8rem;
 	}
 
 	.b4-result .div2 {
 		color: #fbbf24;
-		font-size: 0.7rem;
+		font-size: 0.72rem;
 		font-weight: 700;
 	}
 
 	.b4-result .eq {
-		color: #475569;
-		font-size: 0.7rem;
+		color: #ef444488;
+		font-size: 0.75rem;
 	}
 
 	.b4-result .n {
-		color: #cbd5e1;
+		color: #fecaca;
+		font-size: 1.05rem;
+		font-weight: 900;
+		text-shadow: 0 0 8px #ef444466;
 	}
 
 	.column {
 		background: #2a2a2a;
 		border-radius: 8px;
 		border: 1px solid #3a3a3a;
-		overflow: hidden;
+		/* Visible so column/row float decimals can sit outside the cell box */
+		overflow: visible;
 		transition: border-color 0.2s, box-shadow 0.2s;
 		min-width: 0;
+		position: relative;
+	}
+
+	.column.col-hovered {
+		z-index: 6;
 	}
 
 	.column.hot {
 		border-color: #38bdf8;
 		box-shadow: 0 0 0 1px #38bdf888, 0 0 20px #38bdf822;
+		z-index: 5;
+	}
+
+	/* Clip header chrome only; body needs visible floats */
+	.column > .col-head {
+		border-radius: 8px 8px 0 0;
 	}
 
 	.column.source-hint .col-head {
@@ -998,27 +1365,27 @@
 	}
 
 	.col-head {
-		padding: 8px;
+		padding: 6px 6px 4px;
 		background: #1a1a1a;
 		border-bottom: 1px solid #333;
 		text-align: center;
 		/* Fixed height so /2^n (and other value churn) never reflows the grid */
-		height: 148px;
-		min-height: 148px;
-		max-height: 148px;
+		height: 118px;
+		min-height: 118px;
+		max-height: 118px;
 		box-sizing: border-box;
 		display: flex;
 		flex-direction: column;
 		align-items: center;
 		justify-content: flex-start;
-		gap: 2px;
+		gap: 1px;
 		overflow: hidden;
 		flex-shrink: 0;
 	}
 
-	/* Panel header can use the same height for row alignment; allow slightly more if needed */
+	/* Panel header can use the same height for row alignment */
 	.row-panel .col-head {
-		height: 148px;
+		height: 118px;
 		overflow: hidden;
 	}
 
@@ -1057,50 +1424,90 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		gap: 2px;
+		gap: 3px;
 		width: 100%;
 	}
 
 	.digit-input {
 		width: 100%;
-		max-width: 120px;
+		max-width: 200px;
 		box-sizing: border-box;
-		padding: 3px 6px;
+		padding: 4px 6px;
 		border-radius: 6px;
-		border: 1px solid #334155;
-		background: #0f172a;
+		border: 1px solid #1a3a1a;
+		background: #07140a;
 		color: #7cff4a;
-		font-family: ui-monospace, monospace;
-		font-size: 0.85rem;
-		font-weight: 700;
+		font-family: ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
+		font-size: 1.05rem;
+		font-weight: 800;
 		text-align: center;
-		letter-spacing: 0.04em;
+		letter-spacing: 0.08em;
+		text-shadow: 0 0 10px #7cff4a99, 0 0 2px #7cff4a;
 	}
 
+	/* Column base-3: neon green hero */
+	.digit-input.base3 {
+		font-size: 1.2rem;
+		padding: 5px 6px;
+		border-color: #2a5a2a;
+		background: #051208;
+		color: #7cff4a;
+		text-shadow: 0 0 12px #7cff4acc, 0 0 3px #b6f5a0;
+	}
+
+	/* Row base-4: red hero (matches residue selection colour) */
 	.digit-input.base4 {
 		max-width: 100%;
-		font-size: 0.78rem;
-		padding: 2px 4px;
-		color: #7cff4a;
+		font-size: 1.05rem;
+		padding: 4px 5px;
+		border: 1px solid #5a2020;
+		background: #140808;
+		color: #ff4d4d;
+		text-shadow: 0 0 12px #ef4444cc, 0 0 3px #fca5a5;
+		letter-spacing: 0.1em;
 	}
 
 	.digit-input:focus {
 		outline: none;
 		border-color: #38bdf8;
-		box-shadow: 0 0 0 1px #38bdf866;
+		box-shadow: 0 0 0 1px #38bdf866, 0 0 12px #38bdf833;
 		background: #0c1520;
+	}
+
+	.digit-input.base3:focus {
+		background: #071a0c;
+		border-color: #7cff4a;
+		box-shadow: 0 0 0 1px #7cff4a66, 0 0 14px #7cff4a33;
+	}
+
+	.digit-input.base4:focus {
+		background: #1a0a0a;
+		border-color: #ef4444;
+		box-shadow: 0 0 0 1px #ef444466, 0 0 14px #ef444433;
 	}
 
 	.digit-input::placeholder {
 		color: #475569;
 		font-weight: 500;
+		text-shadow: none;
+		letter-spacing: 0;
 	}
 
 	.rad-tag {
-		font-size: 0.75rem;
-		font-weight: 700;
-		color: #86efac;
+		font-size: 0.95rem;
+		font-weight: 800;
 		flex-shrink: 0;
+		line-height: 1;
+	}
+
+	.rad-tag.rad-3 {
+		color: #7cff4a;
+		text-shadow: 0 0 8px #7cff4aaa;
+	}
+
+	.rad-tag.rad-4 {
+		color: #ff4d4d;
+		text-shadow: 0 0 8px #ef4444aa;
 	}
 
 	.row-digit-edit {
@@ -1120,26 +1527,46 @@
 	}
 
 	.col-val {
-		font-size: 1.15rem;
+		font-size: 1.05rem;
 		font-weight: 800;
 		font-variant-numeric: tabular-nums;
-		color: #f8fafc;
+		color: #e2e8f0;
 		line-height: 1.15;
-		/* Number + reserved /2^n line — fixed footprint */
+		/* = decimal + reserved /2^n — fixed footprint */
 		min-height: 2.15em;
 		display: flex;
 		flex-direction: column;
 		align-items: center;
 		justify-content: flex-start;
+		gap: 0;
+	}
+
+	.col-val .dec-eq {
+		display: none;
 	}
 
 	.col-val .odd-num {
-		line-height: 1.15;
-		min-height: 1.15em;
+		line-height: 1.1;
+		min-height: 1.1em;
+		font-size: 1.05rem;
+		font-weight: 900;
+		color: #f8fafc;
+		letter-spacing: 0.02em;
 	}
 
-	.column.hot .col-val {
+	.column.hot .col-val .odd-num {
 		color: #fbbf24;
+		text-shadow: 0 0 10px #fbbf2466;
+	}
+
+	.column.hot .digit-input.base3 {
+		border-color: #7cff4a88;
+		box-shadow: 0 0 10px #7cff4a22;
+	}
+
+	.col-b3 {
+		margin-top: 0;
+		margin-bottom: 0;
 	}
 
 	.col-meta {
@@ -1152,11 +1579,11 @@
 	}
 
 	.linkish {
-		margin-top: 4px;
+		margin-top: 2px;
 		border: none;
 		background: none;
 		color: #38bdf8;
-		font-size: 0.7rem;
+		font-size: 0.65rem;
 		cursor: pointer;
 		text-decoration: underline;
 		padding: 0;
@@ -1176,6 +1603,7 @@
 	}
 
 	.row-slot {
+		position: relative;
 		display: flex;
 		align-items: center;
 		justify-content: center;
@@ -1186,6 +1614,29 @@
 		/* Browser can skip layout/paint for slots outside the scrollport */
 		content-visibility: auto;
 		contain-intrinsic-size: auto 70px;
+		border-radius: 6px;
+		transition: background 0.15s, box-shadow 0.15s;
+	}
+
+	/* Always paint slots that host float labels or a lit row */
+	.row-slot.top-active,
+	.row-slot.last-active,
+	.row-slot.row-hovered,
+	.row-slot.row-hot {
+		content-visibility: visible;
+	}
+
+	/* Cross-column row highlight (hover or cascade hot row) */
+	.row-slot.row-hovered:not(.panel-slot) {
+		background: #3a3420aa;
+		box-shadow: inset 0 0 0 1px #fbbf2466;
+		z-index: 4;
+	}
+
+	.row-slot.row-hot:not(.panel-slot) {
+		background: #3a3020bb;
+		box-shadow: inset 0 0 0 1px #fbbf2488;
+		z-index: 4;
 	}
 
 	.row-idx {
@@ -1201,6 +1652,66 @@
 	.row-slot.inert .row-idx {
 		color: #333;
 		opacity: 0.55;
+	}
+
+	/* Floating decimal readouts — always on; full → odd core (e.g. 68→17) */
+	.float-dec {
+		position: absolute;
+		z-index: 10;
+		pointer-events: none;
+		font-family: ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
+		font-weight: 900;
+		font-variant-numeric: tabular-nums;
+		line-height: 1;
+		white-space: nowrap;
+		padding: 2px 6px;
+		border-radius: 5px;
+		letter-spacing: 0.02em;
+		opacity: 0.85;
+		transition: opacity 0.12s, box-shadow 0.12s, transform 0.12s;
+	}
+
+	.float-dec.lit {
+		opacity: 1;
+		z-index: 12;
+	}
+
+	/* Green: column base-3 decimal → odd, above every top active node */
+	.float-dec-col {
+		top: 0;
+		left: 50%;
+		transform: translate(-50%, calc(-100% - 2px));
+		font-size: 0.82rem;
+		color: #7cff4a;
+		background: #051208ee;
+		border: 1px solid #2a5a2a;
+		text-shadow: 0 0 10px #7cff4acc, 0 0 2px #b6f5a0;
+		box-shadow: 0 0 10px #7cff4a28, 0 2px 6px #000a;
+	}
+
+	.float-dec-col.lit {
+		transform: translate(-50%, calc(-100% - 3px)) scale(1.05);
+		box-shadow: 0 0 14px #7cff4a55, 0 2px 8px #000a;
+	}
+
+	/* Red: row base-4 decimal → odd, just after the last active (non-zero) node */
+	.float-dec-row {
+		left: auto;
+		right: 0;
+		top: 50%;
+		transform: translate(calc(100% + 4px), -50%);
+		font-size: 0.78rem;
+		color: #ff4d4d;
+		background: #140808f2;
+		border: 1px solid #5a2020;
+		text-shadow: 0 0 10px #ef4444cc, 0 0 2px #fca5a5;
+		box-shadow: 0 0 10px #ef444428, 0 2px 6px #000a;
+		z-index: 14;
+	}
+
+	.float-dec-row.lit {
+		transform: translate(calc(100% + 4px), -50%) scale(1.05);
+		box-shadow: 0 0 14px #ef444455, 0 2px 8px #000a;
 	}
 
 	.explain {
