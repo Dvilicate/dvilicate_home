@@ -334,9 +334,9 @@
 		<div class="brand">
 			<h1>Collatz residue grid</h1>
 			<p class="sub">
-				Drag a node ← →. That column settles, then the change ripples through the cascade.
-				Edits are never blocked — each drag interrupts the animation and restarts from the column
-				you touch.
+				Each cell is a rotating cylinder section (like the explainer): drag to turn it — the strip
+				slides and tilts around the Y axis while wires stay mapped to their numbers. The column
+				settles, then the cascade ripples. Edits are never blocked.
 			</p>
 		</div>
 
@@ -413,17 +413,16 @@
 	</header>
 
 	<section class="legend">
-		<span><i class="swatch shift"></i> green <code>|n&gt;</code> = node shift (drag this)</span>
-		<span><i class="swatch carry"></i> carry <code>&lt;n</code> = ⌊num/4⌋ → left column</span>
-		<span><i class="swatch hot"></i> gold = cell currently updating</span>
-		<span><i class="swatch col"></i> blue outline = column in cascade</span>
-		<span class="muted">Arrow keys work when a cell is focused · ‹ › buttons on hover</span>
+		<span><i class="swatch shift"></i> green dashed = other shift options (0–2)</span>
+		<span><i class="swatch carry"></i> carry <code>&lt;n</code> = ⌊num/4⌋ → left</span>
+		<span><i class="swatch hot"></i> red = selected wire to its target slot</span>
+		<span class="muted">Drag to rotate the section (slides + Y-tilt) · keys 1–3 pick shift</span>
 	</section>
 
 	<div class="grid-wrap">
 		<div
 			class="grid"
-			style="grid-template-columns: repeat({streams.length}, 236px) var(--row-panel-w);"
+			style="grid-template-columns: repeat({streams.length}, var(--col-w)) var(--row-panel-w);"
 		>
 			{#each streams as stream, colIndex}
 				{@const val = colValues[colIndex]}
@@ -564,10 +563,12 @@
 			<summary>How interaction works</summary>
 			<ol>
 				<li>
-					<strong>Drag a node</strong> left or right (or use ‹ › / arrow keys). That changes its
-					ternary <code>nodeShift</code> (0–2). Overflow carries to the row above. You can drag
-					again while a cascade is playing — the animation resets and restarts from the column
-					you edit.
+					<strong>Rotate the cylinder section</strong> left or right (drag, ‹ ›, arrow keys, or
+					keys <code>1</code>–<code>3</code>). Each cell is a clipped drum: the whole strip
+					<em>slides and tilts around Y</em> with <code>shiftTotal</code> (like the explainer),
+					while wires still map each top number to its bottom target
+					(<code>end = ((i%4)·3+2)</code>). Red = selected shift option; green dashed = the other
+					two. Overflow wraps inside the column so the section never flies off.
 				</li>
 				<li>
 					<strong>Column settles</strong> — residues rewire top→bottom
@@ -820,7 +821,9 @@
 	}
 
 	.grid-wrap {
-		--row-panel-w: 156px;
+		/* Wide columns so 12-slot strips + straight links are readable */
+		--col-w: 252px;
+		--row-panel-w: 148px;
 		overflow: auto;
 		background: #222;
 		border: 1px solid #333;
@@ -831,9 +834,10 @@
 
 	.grid {
 		display: grid;
-		gap: 12px;
+		gap: 10px;
 		width: max-content;
 		min-width: 100%;
+		align-items: start;
 	}
 
 	/* Sticky right panel — stays visible while scrolling the grid horizontally */
@@ -870,7 +874,7 @@
 	}
 
 	.panel-slot {
-		min-height: 52px;
+		min-height: 78px;
 	}
 
 	.panel-slot.hot-row .base4-cell {
@@ -896,8 +900,8 @@
 		flex-direction: column;
 		justify-content: center;
 		gap: 2px;
-		/* Match GridCell: labels (~14px) + svg (34px) + border */
-		min-height: 50px;
+		/* Match residue-strip cell height (~labels + wires) */
+		min-height: 74px;
 	}
 
 	.b4-result {
@@ -938,6 +942,7 @@
 		border: 1px solid #3a3a3a;
 		overflow: hidden;
 		transition: border-color 0.2s, box-shadow 0.2s;
+		min-width: 0;
 	}
 
 	.column.hot {
@@ -955,7 +960,7 @@
 		border-bottom: 1px solid #333;
 		text-align: center;
 		/* Keep headers the same height so sticky panel rows line up with cells */
-		min-height: 132px;
+		min-height: 120px;
 		box-sizing: border-box;
 		display: flex;
 		flex-direction: column;
@@ -1055,10 +1060,11 @@
 	}
 
 	.col-val {
-		font-size: 1.2rem;
+		font-size: 1.15rem;
 		font-weight: 800;
 		font-variant-numeric: tabular-nums;
 		color: #f8fafc;
+		line-height: 1.15;
 	}
 
 	.column.hot .col-val {
@@ -1093,14 +1099,17 @@
 	.col-body {
 		display: flex;
 		flex-direction: column;
-		gap: 3px;
-		padding: 6px 4px 8px;
+		gap: 6px;
+		padding: 8px 4px 10px;
+		align-items: center;
 	}
 
 	.row-slot {
 		display: flex;
 		align-items: center;
+		justify-content: center;
 		gap: 4px;
+		width: 100%;
 	}
 
 	.row-idx {
