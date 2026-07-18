@@ -35,7 +35,6 @@ src/lib/components/GridCell.svelte  # cylinder cell + wires + 3 options
 src/routes/explainer/       # main interactive UI
 src/routes/+page.svelte     # hub
 src/routes/test2/           # legacy prototype
-static/explainer-29.png     # reference diagram (n=29)
 ```
 
 ## Mental model (one sentence)

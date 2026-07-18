@@ -12,12 +12,6 @@
 			title: 'Legacy test2',
 			desc: 'Earlier stream prototype (base-3 shifts / drag sections). Kept for reference.',
 			tag: 'Legacy'
-		},
-		{
-			href: '/test',
-			title: 'Legacy test',
-			desc: 'Simple section-drag experiment.',
-			tag: 'Legacy'
 		}
 	];
 </script>
@@ -27,7 +21,7 @@
 		<h1>Collatz workspace</h1>
 		<p>
 			Tools for exploring the Collatz conjecture — hailstone sequences and the
-			base-3 / residue-grid encoding from the explainer diagram.
+			base-3 / residue-grid encoding.
 		</p>
 	</header>
 
@@ -40,13 +34,6 @@
 			</a>
 		{/each}
 	</div>
-
-	<section class="preview">
-		<h3>Reference diagram (29)</h3>
-		<a href="/explainer">
-			<img src="/explainer-29.png" alt="Collatz explainer diagram for 29" />
-		</a>
-	</section>
 </main>
 
 <style>
@@ -132,19 +119,5 @@
 		font-size: 0.92rem;
 		color: #94a3b8;
 		line-height: 1.45;
-	}
-
-	.preview h3 {
-		margin: 0 0 10px;
-		font-size: 0.95rem;
-		color: #94a3b8;
-		font-weight: 600;
-	}
-
-	.preview img {
-		width: 100%;
-		border-radius: 12px;
-		border: 1px solid #334155;
-		display: block;
 	}
 </style>
