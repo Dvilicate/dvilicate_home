@@ -6,6 +6,15 @@
 	<link rel="icon" href="%sveltekit.assets%/favicon.png" />
 	<meta name="viewport" content="width=device-width, initial-scale=1" />
 	%sveltekit.head%
+	<style>
+		/* Site-wide canvas — matches explainer grey; set on html so it never flashes */
+		html,
+		body {
+			margin: 0;
+			background-color: #1a1a1a;
+			color: #e5e5e5;
+		}
+	</style>
 </head>
 
 <body data-sveltekit-preload-data="hover">
@@ -13,10 +22,3 @@
 </body>
 
 </html>
-
-
-<style>
-	html {
-		background-color: #222;
-	}
-</style>

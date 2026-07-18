@@ -15,5 +15,5 @@ export const giscus = {
 	repo: 'Dvilicate/dvilicate_home',
 	repoId: 'R_kgDOTcZFsA',
 	category: 'General',
-	categoryId: '' // paste from https://giscus.app — e.g. 'DIC_kwDO...'
+	categoryId: 'DIC_kwDOTcZFsM4DBe8r'
 };

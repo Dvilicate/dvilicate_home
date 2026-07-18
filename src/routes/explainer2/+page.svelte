@@ -169,12 +169,7 @@
 </div>
 
 <style>
-	:global(body) {
-		margin: 0;
-		background: #0f172a;
-		color: #e2e8f0;
-		font-family: 'Segoe UI', system-ui, sans-serif;
-	}
+	/* Body background lives in +layout / app.html */
 
 	.page {
 		min-height: 100vh;

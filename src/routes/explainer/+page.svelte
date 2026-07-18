@@ -904,12 +904,7 @@
 </div>
 
 <style>
-	:global(body) {
-		margin: 0;
-		background: #1a1a1a;
-		color: #e5e5e5;
-		font-family: 'Segoe UI', system-ui, sans-serif;
-	}
+	/* Body background lives in +layout / app.html so nav doesn't flash other colours */
 
 	.page {
 		padding: 8px 12px 32px;

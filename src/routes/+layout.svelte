@@ -43,10 +43,12 @@
 </div>
 
 <style>
+	:global(html),
 	:global(body) {
 		margin: 0;
-		background: #0f172a;
-		color: #e2e8f0;
+		/* Explainer grey — single source of truth for the whole site */
+		background: #1a1a1a;
+		color: #e5e5e5;
 		font-family: 'Segoe UI', system-ui, sans-serif;
 	}
 
@@ -54,6 +56,7 @@
 		min-height: 100vh;
 		display: flex;
 		flex-direction: column;
+		background: #1a1a1a;
 	}
 
 	.shell > :global(main) {
@@ -67,8 +70,8 @@
 		flex-wrap: wrap;
 		gap: 10px;
 		padding: 14px 20px;
-		border-bottom: 1px solid #1e293b;
-		background: rgba(15, 23, 42, 0.9);
+		border-bottom: 1px solid #2a2a2a;
+		background: rgba(26, 26, 26, 0.92);
 		position: sticky;
 		top: 0;
 		backdrop-filter: blur(6px);
@@ -124,10 +127,10 @@
 	}
 
 	footer {
-		border-top: 1px solid #1e293b;
+		border-top: 1px solid #2a2a2a;
 		padding: 20px;
 		text-align: center;
-		color: #64748b;
+		color: #888;
 		font-size: 0.85rem;
 	}
 
