@@ -6,12 +6,6 @@
 			desc: 'Interactive hailstone sequence + base-3 / 12-slot residue grid. Full column walk, real numbers, step-through play.',
 			tag: 'Recommended',
 			primary: true
-		},
-		{
-			href: '/test2',
-			title: 'Legacy test2',
-			desc: 'Earlier stream prototype (base-3 shifts / drag sections). Kept for reference.',
-			tag: 'Legacy'
 		}
 	];
 </script>

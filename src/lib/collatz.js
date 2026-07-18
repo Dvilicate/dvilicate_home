@@ -1,7 +1,7 @@
 /**
  * Interactive Collatz residue-grid engine.
  *
- * Grid model (from test2 + explainer 29.png):
+ * Grid model (base-3 columns / base-4 rows):
  * - Columns = streams of cells (top → bottom).
  * - Each cell: nodeShift 0–2, num 0–11, shiftTotal (cumulative shift).
  * - Labels: 3² 2² 1² 0²  3¹ 2¹ 1¹ 0¹  3 2 1 0

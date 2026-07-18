@@ -34,7 +34,6 @@ src/lib/collatz.js          # engine: realign, carry, seed, cascade, digit edit,
 src/lib/components/GridCell.svelte  # cylinder cell + wires + 3 options
 src/routes/explainer/       # main interactive UI
 src/routes/+page.svelte     # hub
-src/routes/test2/           # legacy prototype
 ```
 
 ## Mental model (one sentence)

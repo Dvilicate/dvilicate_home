@@ -899,8 +899,6 @@
 
 	<footer class="foot">
 		<a href="/">Home</a>
-		·
-		<a href="/test2">Legacy test2</a>
 	</footer>
 </div>
 
