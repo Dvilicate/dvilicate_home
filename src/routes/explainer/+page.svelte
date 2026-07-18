@@ -1259,9 +1259,12 @@
 		line-height: 1.3;
 	}
 
+	/* Same footprint as grid .row-slot / GridCell (70px) so rows line up */
 	.panel-slot {
-		min-height: 78px;
-		contain-intrinsic-size: auto 78px;
+		height: 70px;
+		min-height: 70px;
+		max-height: 70px;
+		contain-intrinsic-size: auto 70px;
 	}
 
 	.panel-slot.hot-row .base4-cell,
@@ -1277,8 +1280,9 @@
 	.base4-cell {
 		flex: 1;
 		min-width: 0;
+		align-self: stretch;
 		box-sizing: border-box;
-		padding: 4px 6px;
+		padding: 2px 5px;
 		background: #1a1214;
 		border: 1px solid #3f1f1f;
 		outline: 2px solid transparent;
@@ -1287,9 +1291,12 @@
 		display: flex;
 		flex-direction: column;
 		justify-content: center;
-		gap: 3px;
-		/* Match residue-strip cell height (~labels + wires) */
-		min-height: 74px;
+		gap: 1px;
+		/* Fill the 70px slot — do not exceed GridCell height */
+		height: 100%;
+		min-height: 0;
+		max-height: 70px;
+		overflow: hidden;
 	}
 
 	.b4-result {
@@ -1297,33 +1304,33 @@
 		flex-wrap: wrap;
 		align-items: baseline;
 		justify-content: center;
-		gap: 3px;
-		font-size: 0.9rem;
+		gap: 2px;
+		font-size: 0.82rem;
 		font-weight: 800;
 		color: #fca5a5;
-		line-height: 1.2;
+		line-height: 1.1;
 	}
 
 	.b4-result .raw {
 		color: #f87171;
 		font-weight: 700;
-		font-size: 0.8rem;
+		font-size: 0.72rem;
 	}
 
 	.b4-result .div2 {
 		color: #fbbf24;
-		font-size: 0.72rem;
+		font-size: 0.68rem;
 		font-weight: 700;
 	}
 
 	.b4-result .eq {
 		color: #ef444488;
-		font-size: 0.75rem;
+		font-size: 0.7rem;
 	}
 
 	.b4-result .n {
 		color: #fecaca;
-		font-size: 1.05rem;
+		font-size: 0.95rem;
 		font-weight: 900;
 		text-shadow: 0 0 8px #ef444466;
 	}
@@ -1603,8 +1610,11 @@
 		justify-content: center;
 		gap: 4px;
 		width: 100%;
-		/* Match GridCell outer box (70px) so hover never reflows the column */
+		/* Exact GridCell height so sticky panel rows stay level with the grid */
+		height: 70px;
 		min-height: 70px;
+		max-height: 70px;
+		box-sizing: border-box;
 		/* Browser can skip layout/paint for slots outside the scrollport */
 		content-visibility: auto;
 		contain-intrinsic-size: auto 70px;
