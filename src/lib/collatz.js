@@ -86,16 +86,80 @@ export function emptyGrid(cols, rows) {
 	return streams;
 }
 
+/** Deep-clone one column (plain data, no reactivity). */
+export function cloneColumn(col) {
+	const n = col?.length ?? 0;
+	/** @type {Stream} */
+	const out = new Array(n);
+	for (let i = 0; i < n; i++) {
+		const c = col[i];
+		out[i] = {
+			id: c.id,
+			nodeShift: c.nodeShift,
+			num: c.num,
+			shiftTotal: c.shiftTotal
+		};
+	}
+	return out;
+}
+
 /** Deep-clone streams (plain data, no reactivity). */
 export function cloneStreams(streams) {
-	return streams.map((col) =>
-		col.map((cell) => ({
-			id: cell.id,
-			nodeShift: cell.nodeShift,
-			num: cell.num,
-			shiftTotal: cell.shiftTotal
-		}))
-	);
+	const cols = streams?.length ?? 0;
+	/** @type {Stream[]} */
+	const out = new Array(cols);
+	for (let c = 0; c < cols; c++) out[c] = cloneColumn(streams[c]);
+	return out;
+}
+
+/**
+ * Snapshot the grid for an animation frame.
+ * Reuses column array refs from `prev` for columns not in `dirtyCols`
+ * (copy-on-write) so large-grid cascades allocate far less.
+ *
+ * @param {Stream[]} streams  live working grid
+ * @param {Stream[] | null} [prev]  previous frame snapshot
+ * @param {number[] | null} [dirtyCols]  columns that changed since prev
+ * @returns {Stream[]}
+ */
+export function snapshotStreams(streams, prev = null, dirtyCols = null) {
+	if (!prev || !dirtyCols || dirtyCols.length === 0) {
+		return cloneStreams(streams);
+	}
+	const cols = streams.length;
+	/** @type {Stream[]} */
+	const out = new Array(cols);
+	const dirty = new Set(dirtyCols);
+	for (let c = 0; c < cols; c++) {
+		out[c] = dirty.has(c) ? cloneColumn(streams[c]) : prev[c];
+	}
+	return out;
+}
+
+/**
+ * Copy shift/num/shiftTotal from `src` into existing `dest` cells.
+ * Keeps cell object identity so the UI can do fine-grained updates
+ * instead of rebuilding the whole grid each cascade frame.
+ *
+ * @param {Stream[]} dest
+ * @param {Stream[]} src
+ * @returns {Stream[]}
+ */
+export function patchStreams(dest, src) {
+	const cols = Math.min(dest.length, src.length);
+	for (let c = 0; c < cols; c++) {
+		const dc = dest[c];
+		const sc = src[c];
+		const rows = Math.min(dc.length, sc.length);
+		for (let r = 0; r < rows; r++) {
+			const d = dc[r];
+			const s = sc[r];
+			if (d.nodeShift !== s.nodeShift) d.nodeShift = s.nodeShift;
+			if (d.num !== s.num) d.num = s.num;
+			if (d.shiftTotal !== s.shiftTotal) d.shiftTotal = s.shiftTotal;
+		}
+	}
+	return dest;
 }
 
 /**
@@ -768,11 +832,24 @@ function emitByRowColumnFrames(streams, target, full, prev, frames, opts = {}) {
 	const dropTail = opts.dropTail ?? false;
 	const lastChange = opts.lastChange ?? 0;
 	const n = streams[target].length;
+	const dirty = [target];
 
 	// Start from previous visual state
 	copyColumnState(streams, target, prev);
 
 	const { first, last } = interestingRowRange(prev, full);
+
+	const pushFrame = (kind, rowIndex) => {
+		const prevSnap = frames[frames.length - 1]?.streams ?? null;
+		/** @type {CascadeFrame} */
+		const frame = {
+			kind,
+			streamId: target,
+			streams: snapshotStreams(streams, prevSnap, dirty)
+		};
+		if (rowIndex !== undefined) frame.rowIndex = rowIndex;
+		frames.push(frame);
+	};
 
 	if (first < 0) {
 		// Nothing interesting — snap to full and one column frame
@@ -781,11 +858,7 @@ function emitByRowColumnFrames(streams, target, full, prev, frames, opts = {}) {
 		}
 		if (dropTail) dropStreamToZeroAt(streams[target], lastChange);
 		else realignStream(streams[target]);
-		frames.push({
-			kind: 'column',
-			streamId: target,
-			streams: cloneStreams(streams)
-		});
+		pushFrame('column');
 		return;
 	}
 
@@ -799,12 +872,7 @@ function emitByRowColumnFrames(streams, target, full, prev, frames, opts = {}) {
 	for (let r = first; r <= last; r++) {
 		streams[target][r].nodeShift = full[r]?.nodeShift ?? 0;
 		realignStream(streams[target]);
-		frames.push({
-			kind: 'row',
-			streamId: target,
-			rowIndex: r,
-			streams: cloneStreams(streams)
-		});
+		pushFrame('row', r);
 	}
 
 	// Commit full final column (including any trailing zeros)
@@ -813,11 +881,7 @@ function emitByRowColumnFrames(streams, target, full, prev, frames, opts = {}) {
 	}
 	if (dropTail) dropStreamToZeroAt(streams[target], lastChange);
 	else realignStream(streams[target]);
-	frames.push({
-		kind: 'column',
-		streamId: target,
-		streams: cloneStreams(streams)
-	});
+	pushFrame('column');
 }
 
 /**
@@ -848,17 +912,18 @@ export function buildCascadeFrames(streams, fromStreamId, opts = {}) {
 		const lastChange = deriveLeftInto(streams[c], streams[target]);
 
 		if (byRow) {
-			const full = cloneStreams([streams[target]])[0];
+			const full = cloneColumn(streams[target]);
 			const prev = frames[frames.length - 1].streams[target];
 			emitByRowColumnFrames(streams, target, full, prev, frames, {
 				lastChange,
 				dropTail: true
 			});
 		} else {
+			const prevSnap = frames[frames.length - 1].streams;
 			frames.push({
 				kind: 'column',
 				streamId: target,
-				streams: cloneStreams(streams)
+				streams: snapshotStreams(streams, prevSnap, [target])
 			});
 		}
 	}
@@ -868,17 +933,18 @@ export function buildCascadeFrames(streams, fromStreamId, opts = {}) {
 			const target = c + 1;
 			const lastChange = deriveRightInto(streams[c], streams[target]);
 			if (byRow) {
-				const full = cloneStreams([streams[target]])[0];
+				const full = cloneColumn(streams[target]);
 				const prev = frames[frames.length - 1].streams[target];
 				emitByRowColumnFrames(streams, target, full, prev, frames, {
 					lastChange,
 					dropTail: false
 				});
 			} else {
+				const prevSnap = frames[frames.length - 1].streams;
 				frames.push({
 					kind: 'column',
 					streamId: target,
-					streams: cloneStreams(streams)
+					streams: snapshotStreams(streams, prevSnap, [target])
 				});
 			}
 		}
@@ -931,24 +997,23 @@ export function planMove(streams, streamId, nodeIndex, delta, opts = {}) {
 	}
 
 	if (doRight) {
-		// Right cascade from source column using the latest working state
-		// (after left cascade if both were requested)
-		const base = doLeft ? cloneStreams(frames[frames.length - 1].streams) : working;
-		for (let c = streamId; c < base.length - 1; c++) {
+		// Continue from `working` (already at post-left state if doLeft ran).
+		for (let c = streamId; c < working.length - 1; c++) {
 			const target = c + 1;
-			const lastChange = deriveRightInto(base[c], base[target]);
+			const lastChange = deriveRightInto(working[c], working[target]);
 			if (opts.byRow) {
-				const full = cloneStreams([base[target]])[0];
+				const full = cloneColumn(working[target]);
 				const prevSnap = frames[frames.length - 1].streams[target];
-				emitByRowColumnFrames(base, target, full, prevSnap, frames, {
+				emitByRowColumnFrames(working, target, full, prevSnap, frames, {
 					lastChange,
 					dropTail: false
 				});
 			} else {
+				const prevSnap = frames[frames.length - 1].streams;
 				frames.push({
 					kind: 'column',
 					streamId: target,
-					streams: cloneStreams(base)
+					streams: snapshotStreams(working, prevSnap, [target])
 				});
 			}
 		}

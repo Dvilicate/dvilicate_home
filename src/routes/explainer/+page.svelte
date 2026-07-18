@@ -12,6 +12,7 @@
 		columnBase3Digits,
 		columnValue,
 		emptyGrid,
+		patchStreams,
 		planMove,
 		seedNumberIntoGrid,
 		splitOddEven
@@ -37,6 +38,15 @@
 
 	/** Animate cell-by-cell down each column, vs whole column at once */
 	let byRow = $state(true);
+
+	/**
+	 * Always show full cylinder wires on every cell (like pre-lite UI).
+	 * Off by default for large-grid performance.
+	 */
+	let showAllConnections = $state(false);
+
+	/** Column under the pointer — expand full wires for the whole column */
+	let hoverCol = $state(/** @type {number | null} */ (null));
 
 	/** ms between cascade frames */
 	let speedMs = $state(120);
@@ -107,7 +117,7 @@
 			colFresh = true;
 			applyColumnBase3Digits(grid[colIndex], '', { replace: true });
 			cascadeInstant(grid, colIndex, direction);
-			streams = grid;
+			patchStreams(streams, grid);
 			hotCol = colIndex;
 			hotRow = null;
 			status = `Col ${colIndex} cleared — type a new base-3 number to start fresh.`;
@@ -118,7 +128,7 @@
 			replace: colFresh
 		});
 		cascadeInstant(grid, colIndex, direction);
-		streams = grid;
+		patchStreams(streams, grid);
 		hotCol = colIndex;
 		hotRow = result.changedRows[0] ?? null;
 		const mode =
@@ -154,7 +164,7 @@
 			rowFresh = true;
 			applyRowBase4Digits(grid, rowIndex, '', { replace: true });
 			// Clear doesn't need a wide cascade; realign already done per col
-			streams = grid;
+			patchStreams(streams, grid);
 			hotCol = null;
 			hotRow = rowIndex;
 			status = `Row ${rowIndex} cleared — type a new base-4 number to start fresh.`;
@@ -165,7 +175,7 @@
 			replace: rowFresh
 		});
 		cascadeInstantFromCols(grid, result.changedCols, direction);
-		streams = grid;
+		patchStreams(streams, grid);
 		hotCol = result.changedCols[0] ?? null;
 		hotRow = rowIndex;
 		const mode =
@@ -224,17 +234,22 @@
 				return;
 			}
 			const frame = frames[i];
-			streams = cloneStreams(frame.streams);
+			// Mutate existing cell objects — keeps component identity, only
+			// cells whose num/shift actually change re-render.
+			patchStreams(streams, frame.streams);
 			hotCol = frame.streamId;
 			hotRow = frame.rowIndex ?? null;
 
-			const label =
-				frame.kind === 'source'
-					? `Source col ${frame.streamId}`
-					: frame.kind === 'row'
-						? `Col ${frame.streamId} · row ${frame.rowIndex}`
-						: `Col ${frame.streamId}`;
-			status = `${label}  ·  step ${i + 1}/${frames.length}`;
+			// Status every frame is cheap; skip on very large runs for less churn
+			if (frames.length < 80 || i % 3 === 0 || i === frames.length - 1) {
+				const label =
+					frame.kind === 'source'
+						? `Source col ${frame.streamId}`
+						: frame.kind === 'row'
+							? `Col ${frame.streamId} · row ${frame.rowIndex}`
+							: `Col ${frame.streamId}`;
+				status = `${label}  ·  step ${i + 1}/${frames.length}`;
+			}
 
 			i += 1;
 			animTimer = setTimeout(step, Math.max(30, Number(speedMs) || 120));
@@ -378,6 +393,16 @@
 				Animate row-by-row inside each column
 			</label>
 
+			<button
+				type="button"
+				class="btn"
+				class:primary={showAllConnections}
+				onclick={() => (showAllConnections = !showAllConnections)}
+				title="Always show full wire mesh on every cell (heavier on large grids). When off, hover a column to reveal its connections."
+			>
+				{showAllConnections ? 'Connections: all' : 'Connections: auto'}
+			</button>
+
 			<label class="field narrow">
 				<span>Speed ms</span>
 				<input type="number" min="30" max="800" step="10" bind:value={speedMs} />
@@ -416,7 +441,7 @@
 		<span><i class="swatch shift"></i> green dashed = other shift options (0–2)</span>
 		<span><i class="swatch carry"></i> carry <code>&lt;n</code> = ⌊num/4⌋ → left</span>
 		<span><i class="swatch hot"></i> red = selected wire to its target slot</span>
-		<span class="muted">Drag to rotate the section (slides + Y-tilt) · keys 1–3 pick shift</span>
+		<span class="muted">Drag to rotate · keys 1–3 pick shift · hover a column for full wires</span>
 	</section>
 
 	<div class="grid-wrap">
@@ -440,10 +465,11 @@
 								? `${meta.value} = ${meta.odd} × 2^${meta.twos} (show odd)`
 								: `Base-3 value ${meta.value}`}
 						>
-							{meta.odd}
-							{#if meta.twos > 0}
-								<span class="twos-tag">/2^{meta.twos}</span>
-							{/if}
+							<span class="odd-num">{meta.odd}</span>
+							<!-- Always reserve this line so /2^n appearing doesn't reflow the header -->
+							<span class="twos-tag" class:hidden={meta.twos <= 0}>
+								{#if meta.twos > 0}/2^{meta.twos}{:else}&nbsp;{/if}
+							</span>
 						</div>
 						<label class="digit-edit" title="Edit base-3 digits (0–2). Patch in place; clear then retype for a fresh number.">
 							<span class="digit-edit-label">base 3</span>
@@ -480,14 +506,28 @@
 						</button>
 					</header>
 
-					<div class="col-body">
+					<!-- svelte-ignore a11y_no_static_element_interactions -->
+					<div
+						class="col-body"
+						onmouseenter={() => (hoverCol = colIndex)}
+						onmouseleave={() => {
+							if (hoverCol === colIndex) hoverCol = null;
+						}}
+					>
 						{#each stream as cell, rowIndex (cell.id)}
-							<div class="row-slot">
+							{@const meta = colMeta[colIndex]}
+							{@const inertZero =
+								meta.last < 0 || rowIndex < meta.lead || rowIndex > meta.last}
+							<div class="row-slot" class:inert={inertZero}>
 								<span class="row-idx">{rowIndex}</span>
 								<GridCell
 									{cell}
 									active={hotCol === colIndex && (hotRow === null || hotRow === rowIndex)}
 									columnActive={hotCol === colIndex}
+									dimmed={inertZero}
+									forceExpanded={showAllConnections ||
+										hoverCol === colIndex ||
+										(animating && hotCol === colIndex)}
 									onMove={(dir) => handleMove(colIndex, rowIndex, dir)}
 								/>
 							</div>
@@ -825,6 +865,8 @@
 		--col-w: 252px;
 		--row-panel-w: 148px;
 		overflow: auto;
+		/* Keep layout stable when scrollbars appear as columns expand */
+		scrollbar-gutter: stable;
 		background: #222;
 		border: 1px solid #333;
 		border-radius: 12px;
@@ -875,6 +917,7 @@
 
 	.panel-slot {
 		min-height: 78px;
+		contain-intrinsic-size: auto 78px;
 	}
 
 	.panel-slot.hot-row .base4-cell {
@@ -959,22 +1002,39 @@
 		background: #1a1a1a;
 		border-bottom: 1px solid #333;
 		text-align: center;
-		/* Keep headers the same height so sticky panel rows line up with cells */
-		min-height: 120px;
+		/* Fixed height so /2^n (and other value churn) never reflows the grid */
+		height: 148px;
+		min-height: 148px;
+		max-height: 148px;
 		box-sizing: border-box;
 		display: flex;
 		flex-direction: column;
 		align-items: center;
-		justify-content: center;
+		justify-content: flex-start;
 		gap: 2px;
+		overflow: hidden;
+		flex-shrink: 0;
+	}
+
+	/* Panel header can use the same height for row alignment; allow slightly more if needed */
+	.row-panel .col-head {
+		height: 148px;
+		overflow: hidden;
 	}
 
 	.col-val .twos-tag {
 		display: block;
+		height: 0.85em;
+		min-height: 0.85em;
 		font-size: 0.55rem;
 		font-weight: 600;
 		color: #fbbf24;
 		letter-spacing: 0.02em;
+		line-height: 0.85em;
+	}
+
+	.col-val .twos-tag.hidden {
+		visibility: hidden;
 	}
 
 	.digit-edit {
@@ -1065,6 +1125,17 @@
 		font-variant-numeric: tabular-nums;
 		color: #f8fafc;
 		line-height: 1.15;
+		/* Number + reserved /2^n line — fixed footprint */
+		min-height: 2.15em;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: flex-start;
+	}
+
+	.col-val .odd-num {
+		line-height: 1.15;
+		min-height: 1.15em;
 	}
 
 	.column.hot .col-val {
@@ -1110,6 +1181,11 @@
 		justify-content: center;
 		gap: 4px;
 		width: 100%;
+		/* Match GridCell outer box (70px) so hover never reflows the column */
+		min-height: 70px;
+		/* Browser can skip layout/paint for slots outside the scrollport */
+		content-visibility: auto;
+		contain-intrinsic-size: auto 70px;
 	}
 
 	.row-idx {
@@ -1119,6 +1195,12 @@
 		text-align: right;
 		flex-shrink: 0;
 		font-variant-numeric: tabular-nums;
+	}
+
+	/* Match row label to dimmed inert-zero cells */
+	.row-slot.inert .row-idx {
+		color: #333;
+		opacity: 0.55;
 	}
 
 	.explain {
