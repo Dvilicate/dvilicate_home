@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body, html { margin: 0; padding: 0; background: #0f172a; color: #94a3b8; font-family: sans-serif; overflow: hidden; }
+        svg { width: 100vw; height: 100vh; display: block; }
+        #btn { position: absolute; top: 20px; right: 20px; padding: 12px 24px; background: #38bdf8; color: #0f172a; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; z-index: 100; font-size: 16px; }
+        #btn:hover { background: #7dd3fc; }
+        canvas { display: none; }
+    </style>
+</head>
+<body>
+
+<button id="btn" onclick="downloadImage()">Download 4K PNG</button>
+<svg id="graph" xmlns="http://w3.org"></svg>
+<canvas id="exportCanvas"></canvas>
+
+<script>
+    const svg = document.getElementById('graph');
+    const xPowMin = -1, xPowMax = 6;    
+    const yPowMin = -2, yPowMax = 8;  
+
+    function generateGraph(width, height) {
+        const margin = 120;
+        const getX = (val) => {
+            const logVal = Math.log(val);
+            const logMin = xPowMin * Math.log(3);
+            const logMax = xPowMax * Math.log(3);
+            return margin + ((logVal - logMin) / (logMax - logMin)) * (width - margin * 2);
+        };
+        const getY = (val) => {
+            const logVal = Math.log(val);
+            const logMin = yPowMin * Math.log(2);
+            const logMax = yPowMax * Math.log(2);
+            return margin + ((logVal - logMin) / (logMax - logMin)) * (height - margin * 2);
+        };
+
+        const xAnchor = getX(1); 
+        const yAnchor = getY(1); 
+
+        let html = `<rect width="${width}" height="${height}" fill="#0f172a" />`;
+
+        // Inner Guides (Multiples of 4) with Decluttering Logic
+        // X-axis
+        for (let i = 4; i <= Math.pow(3, xPowMax); i += 4) {
+            let x = getX(i);
+            if (x >= margin && x <= width - margin) {
+                html += `<line x1="${x}" y1="${margin}" x2="${x}" y2="${height-margin}" stroke="#1e293b" stroke-width="1" stroke-dasharray="6,4" />`;
+                // Declutter: If > 40, only label multiples of 20
+                if (i <= 40 || i % 20 === 0) {
+                    html += `<text x="${x}" y="${yAnchor + 20}" text-anchor="middle" fill="#475569" font-size="11px" font-weight="bold">${i}</text>`;
+                }
+            }
+        }
+        // Y-axis
+        for (let i = 4; i <= Math.pow(2, yPowMax); i += 4) {
+            let y = getY(i);
+            if (y >= margin && y <= height - margin) {
+                html += `<line x1="${margin}" y1="${y}" x2="${width-margin}" y2="${y}" stroke="#1e293b" stroke-width="1" stroke-dasharray="6,4" />`;
+                // Declutter: If > 40, only label multiples of 20
+                if (i <= 40 || i % 20 === 0) {
+                    html += `<text x="${xAnchor - 10}" y="${y + 4}" text-anchor="end" fill="#475569" font-size="11px" font-weight="bold">${i}</text>`;
+                }
+            }
+        }
+
+        // Major Power Lines
+        for (let n = xPowMin; n <= xPowMax; n++) { 
+            let x = getX(Math.pow(3, n));
+            html += `<line x1="${x}" y1="${margin}" x2="${x}" y2="${height-margin}" stroke="#475569" stroke-width="3" />`;
+            html += `<text x="${x}" y="${margin-30}" text-anchor="middle" fill="#f1f5f9" font-weight="bold" font-size="22px">3^${n}</text>`;
+        }
+        for (let n = yPowMin; n <= yPowMax; n++) { 
+            let y = getY(Math.pow(2, n));
+            html += `<line x1="${margin}" y1="${y}" x2="${width-margin}" y2="${y}" stroke="#475569" stroke-width="3" />`;
+            html += `<text x="${margin-45}" y="${y+8}" text-anchor="end" fill="#f1f5f9" font-weight="bold" font-size="22px">2^${n}</text>`;
+        }
+
+  
+
+        return html;
+    }
+
+    function render() {
+        svg.setAttribute('width', window.innerWidth);
+        svg.setAttribute('height', window.innerHeight);
+        svg.innerHTML = generateGraph(window.innerWidth, window.innerHeight);
+    }
+
+    function downloadImage() {
+        const canvas = document.getElementById('exportCanvas');
+        const ctx = canvas.getContext('2d');
+        const exportWidth = 3840;
+        const exportHeight = 2160;
+        canvas.width = exportWidth;
+        canvas.height = exportHeight;
+        const highResSvgContent = generateGraph(exportWidth, exportHeight);
+        const fullSvg = `<svg xmlns="http://w3.org" width="${exportWidth}" height="${exportHeight}">${highResSvgContent}</svg>`;
+        const img = new Image();
+        const svgBlob = new Blob([fullSvg], {type: 'image/svg+xml;charset=utf-8'});
+        const url = URL.createObjectURL(svgBlob);
+        img.onload = function() {
+            ctx.drawImage(img, 0, 0);
+            const link = document.createElement("a");
+            link.href = canvas.toDataURL("image/png");
+            link.download = "decluttered-log-graph-4k.png";
+            link.click();
+            URL.revokeObjectURL(url);
+        };
+        img.src = url;
+    }
+
+    window.addEventListener('resize', render);
+    render();
+</script>
+</body>
+</html>
+

@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Grid with Lines and Spacing</title>
+	<style>
+		table {
+			width: 190px;
+			border-collapse: collapse;
+			text-align: center;
+			position: relative;
+			z-index: 1;
+		}
+
+		td {
+
+			border: 1px solid black;
+			margin-bottom: 30px;
+			/* padding: 0px; */
+			/* Increased padding for more space inside cells */
+			width: 8.33%;
+			/* Equal width for 12 columns */
+		}
+
+		tr {
+			height: 20px;
+
+			/* Adds more space between rows */
+		}
+
+		/* Position the canvas behind the table */
+		#lineCanvas {
+			position: absolute;
+			top: 0;
+			left: 0;
+			z-index: 0;
+		}
+
+		.table-wrapper {
+			position: relative;
+		}
+	</style>
+</head>
+
+<body>
+
+	<div class="table-wrapper">
+		<!-- Canvas to draw lines -->
+		<canvas id="lineCanvas"></canvas>
+
+		<!-- Grid table -->
+		<table id="gridTable">
+			<!-- Header Row -->
+			<!-- <tr>
+				<th>0</th>
+				<th>1</th>
+				<th>2</th>
+				<th>3</th>
+				<th>0¹</th>
+				<th>1¹</th>
+				<th>2¹</th>
+				<th>3¹</th>
+				<th>0²</th>
+				<th>1²</th>
+				<th>2²</th>
+				<th>3²</th>
+			</tr>
+			<tr></tr> -->
+			<!-- Grid Rows -->
+			<tr>
+				<td>0</td>
+				<td>1</td>
+				<td>2</td>
+				<td>3</td>
+				<td>0¹</td>
+				<td>1¹</td>
+				<td>2¹</td>
+				<td>3¹</td>
+				<td>0²</td>
+				<td>1²</td>
+				<td>2²</td>
+				<td>3²</td>
+			</tr>
+			<tr></tr>
+			<tr>
+				<td>0</td>
+				<td>1</td>
+				<td>2</td>
+				<td>3</td>
+				<td>0¹</td>
+				<td>1¹</td>
+				<td>2¹</td>
+				<td>3¹</td>
+				<td>0²</td>
+				<td>1²</td>
+				<td>2²</td>
+				<td>3²</td>
+			</tr>
+			<tr></tr>
+			<tr>
+				<td>0</td>
+				<td>1</td>
+				<td>2</td>
+				<td>3</td>
+				<td>0¹</td>
+				<td>1¹</td>
+				<td>2¹</td>
+				<td>3¹</td>
+				<td>0²</td>
+				<td>1²</td>
+				<td>2²</td>
+				<td>3²</td>
+			</tr>
+			<tr></tr>
+			<tr>
+				<td>0</td>
+				<td>1</td>
+				<td>2</td>
+				<td>3</td>
+				<td>0¹</td>
+				<td>1¹</td>
+				<td>2¹</td>
+				<td>3¹</td>
+				<td>0²</td>
+				<td>1²</td>
+				<td>2²</td>
+				<td>3²</td>
+			</tr>
+
+			<!-- Add more rows as needed -->
+		</table>
+	</div>
+
+	<script>
+		// Function to draw lines on the canvas between '1' and '1++' cells
+		function drawLines() {
+			const table = document.getElementById('gridTable');
+			const canvas = document.getElementById('lineCanvas');
+			const ctx = canvas.getContext('2d');
+
+			// Set canvas size based on the table size
+			const rect = table.getBoundingClientRect();
+			canvas.width = rect.width;
+			canvas.height = rect.height;
+
+			// Get all rows of the table
+			const rows = table.getElementsByTagName('tr');
+
+			// Loop through the rows and draw lines between '1' and '1++' cells
+			for (let i = 0; i < rows.length - 2; i += 2) {
+				const currentRow = rows[i];
+				const nextRow = rows[i + 2];
+
+				// Get the '1' cell in the current row and '1++' cell in the next row
+				const currentCell = currentRow.cells[1]; // '1' cell
+				const nextCell = nextRow.cells[9]; // '1++' cell
+
+				// Get positions of the cells
+				const currentCellRect = currentCell.getBoundingClientRect();
+				const nextCellRect = nextCell.getBoundingClientRect();
+
+				// Calculate the start and end points for the line (center of each cell)
+				const startX = currentCellRect.left + currentCellRect.width / 2 - rect.left;
+				const startY = currentCellRect.top + currentCellRect.height - rect.top;
+				//const startY = currentCellRect.top + currentCellRect.height / 2 - rect.top;
+				const endX = nextCellRect.left + nextCellRect.width / 2 - rect.left;
+				const endY = nextCellRect.top - rect.top;
+				//const endY = nextCellRect.top + nextCellRect.height / 2 - rect.top;
+
+				// Draw the line
+				ctx.beginPath();
+				ctx.moveTo(startX, startY);
+				ctx.lineTo(endX, endY);
+				ctx.strokeStyle = 'red'; // Line color
+				ctx.lineWidth = 2; // Line width
+				ctx.stroke();
+			}
+		}
+
+		// Call the drawLines function after the page has loaded
+		window.onload = drawLines;
+
+		// Call the drawLines function on window resize to redraw the lines
+		window.onresize = drawLines;
+	</script>
+
+</body>
+
+</html>
