@@ -1,4 +1,5 @@
 <script>
+	import { base } from '$app/paths';
 	import { browser } from '$app/environment';
 	import { tick } from 'svelte';
 	import GridCell from '$lib/components/GridCell.svelte';
@@ -469,7 +470,7 @@
 <div class="page">
 	<header class="top">
 		<div class="top-bar">
-			<a class="home-btn" href="/" title="Back to workspace home">← Home</a>
+			<a class="home-btn" href="{base}/maths" title="Back to maths section">← Maths</a>
 			<h1 class="title">Collatz residue grid</h1>
 			<p class="sub" title="Drag nodes to rotate; cascade ripples through remaining columns. Edits never block.">
 				Drag to rotate · cascade ripples · edits never blocked
@@ -898,7 +899,7 @@
 	</section>
 
 	<footer class="foot">
-		<a href="/">Home</a>
+		<a href="{base}/maths">Maths hub</a>
 	</footer>
 </div>
 

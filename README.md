@@ -6,6 +6,8 @@ Interactive Svelte app for exploring the **Collatz conjecture** via a custom **b
 
 Not a Collatz solver. A spatial calculator: encode numbers so **×3** and **÷2** look like digit shifts/carries. Drag cylinder sections, watch cascades, read mixed-radix values.
 
+The **suffix sieve** (`/sieve`) is the other half of the story: trailing base-4 digits **force** whether a residue class still grows or is already proven to decrease for large \(n\). That corrects the popular “random hailstorm / coin-flip each step” picture — local up/down is patterned; the open problem is unbounded residual suffixes. Full write-up: [`docs/suffix-sieve.md`](docs/suffix-sieve.md).
+
 ## Core model
 
 | Concept | Meaning |
@@ -31,9 +33,14 @@ Not a Collatz solver. A spatial calculator: encode numbers so **×3** and **÷2*
 
 ```
 src/lib/collatz.js          # engine: realign, carry, seed, cascade, digit edit, base-3/4 reads
+src/lib/suffixSieve.js      # trailing base-4 suffix sieve (score / prune)
 src/lib/components/GridCell.svelte  # cylinder cell + wires + 3 options
-src/routes/explainer/       # main interactive UI
+src/routes/explainer/       # residue-grid UI
+src/routes/explainer2/      # base-4 spawn tree
+src/routes/sieve/           # suffix sieve visualizer
 src/routes/+page.svelte     # hub
+docs/suffix-sieve.md        # sieve math: forced prefixes, score, patterns, caveats
+scripts/verify-suffix-sieve.mjs  # independent checks vs real Collatz
 ```
 
 ## Mental model (one sentence)
